@@ -4,7 +4,10 @@ mod providers;
 mod search;
 mod wave;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -15,7 +18,7 @@ use crate::{
     effect::AppEffect,
     provider::ProviderRegistry,
     secrets::SecretStore,
-    storage::Storage,
+    storage::{HistoryEntry, Storage},
 };
 
 use message::RuntimeMessage;
@@ -39,6 +42,8 @@ pub struct Runtime {
     last_audio_status: Option<AudioStatus>,
     notices: Vec<String>,
     storage: Storage,
+    current_track: Option<crate::model::TrackRef>,
+    current_track_started: bool,
 }
 
 impl Runtime {
@@ -68,6 +73,8 @@ impl Runtime {
             last_audio_status: None,
             notices,
             storage,
+            current_track: None,
+            current_track_started: false,
         }
     }
 
@@ -107,6 +114,7 @@ impl Runtime {
                     }
                 }
                 AppEffect::Stop => {
+                    self.record_current(false, true);
                     self.cancel_playback();
                     if let Some(audio) = &self.audio {
                         audio.stop();
@@ -147,6 +155,8 @@ impl Runtime {
                 RuntimeMessage::PlaybackFailed { generation, error }
                     if generation == self.playback_generation =>
                 {
+                    self.current_track = None;
+                    self.current_track_started = false;
                     actions.push(Action::PlaybackFailed(error));
                 }
                 RuntimeMessage::WaveFinished {
@@ -159,9 +169,10 @@ impl Runtime {
                 _ => {}
             }
         }
+        let mut audio_events = Vec::new();
         if let Some(audio) = &self.audio {
             while let Some(event) = audio.try_event() {
-                actions.push(Action::Audio(event));
+                audio_events.push(event);
             }
             let status = audio.status();
             if self.last_audio_status.as_ref() != Some(&status) {
@@ -171,6 +182,17 @@ impl Runtime {
                 });
                 self.last_audio_status = Some(status);
             }
+        }
+        for event in audio_events {
+            match &event {
+                crate::audio::AudioEvent::Playing => self.current_track_started = true,
+                crate::audio::AudioEvent::Ended => self.record_current(true, false),
+                crate::audio::AudioEvent::Failed(_) | crate::audio::AudioEvent::OutputFailed(_) => {
+                    self.record_current(false, true)
+                }
+                _ => {}
+            }
+            actions.push(Action::Audio(event));
         }
         actions
     }
@@ -203,6 +225,7 @@ impl Runtime {
     }
 
     fn start_playback(&mut self, track: crate::model::TrackRef, actions: &mut Vec<Action>) {
+        self.record_current(false, true);
         self.cancel_playback();
         let Some(provider) = self.providers.get(track.provider) else {
             actions.push(Action::PlaybackFailed(format!(
@@ -214,6 +237,8 @@ impl Runtime {
         if let Some(audio) = &self.audio {
             audio.reset();
         }
+        self.current_track = Some(track.clone());
+        self.current_track_started = false;
         self.playback_task = Some(spawn_playback(
             provider,
             self.sender.clone(),
@@ -264,6 +289,29 @@ impl Runtime {
         }
         self.playback_generation = self.playback_generation.wrapping_add(1);
     }
+
+    fn record_current(&mut self, completed: bool, skipped: bool) {
+        let Some(track) = self.current_track.take() else {
+            return;
+        };
+        if !self.current_track_started {
+            return;
+        }
+        self.current_track_started = false;
+        let played_at_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as i64)
+            .unwrap_or_default();
+        if let Err(error) = self.storage.record_history(&HistoryEntry {
+            track,
+            played_at_ms,
+            completed,
+            skipped,
+        }) {
+            self.notices
+                .push(format!("Не удалось сохранить историю: {error}"));
+        }
+    }
 }
 
 impl Drop for Runtime {
@@ -299,6 +347,8 @@ mod tests {
             last_audio_status: None,
             notices: Vec::new(),
             storage: Storage::new(std::path::PathBuf::from("unused.sqlite3")),
+            current_track: None,
+            current_track_started: false,
         };
         sender
             .send(RuntimeMessage::SearchFinished {
@@ -342,6 +392,8 @@ mod tests {
             last_audio_status: None,
             notices: Vec::new(),
             storage: Storage::new(std::path::PathBuf::from("unused.sqlite3")),
+            current_track: None,
+            current_track_started: false,
         };
         let actions = runtime.dispatch(vec![AppEffect::Search {
             query: String::new(),
@@ -372,6 +424,8 @@ mod tests {
             last_audio_status: None,
             notices: Vec::new(),
             storage: Storage::new(std::path::PathBuf::from("unused.sqlite3")),
+            current_track: None,
+            current_track_started: false,
         };
         let actions = runtime.dispatch(vec![AppEffect::GenerateWave]);
         assert!(matches!(
@@ -379,5 +433,52 @@ mod tests {
             [Action::WaveFinished { tracks, failures }]
                 if tracks.is_empty() && failures.len() == 1
         ));
+    }
+
+    #[test]
+    fn finished_track_reaches_wave_history_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("history.sqlite3"));
+        storage.initialize().unwrap();
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let mut runtime = Runtime {
+            providers: Arc::new(ProviderRegistry::default()),
+            audio: None,
+            sender,
+            receiver,
+            search_task: None,
+            playback_task: None,
+            wave_task: None,
+            search_generation: 0,
+            playback_generation: 0,
+            wave_generation: 0,
+            search_delay: Duration::ZERO,
+            last_audio_status: None,
+            notices: Vec::new(),
+            storage: storage.clone(),
+            current_track: Some(history_track()),
+            current_track_started: true,
+        };
+        runtime.record_current(true, false);
+        runtime.record_current(true, false);
+        let history = storage.recent_history(10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].completed);
+        assert!(!history[0].skipped);
+    }
+
+    fn history_track() -> crate::model::TrackRef {
+        crate::model::TrackRef {
+            provider: crate::model::ProviderKind::SoundCloud,
+            id: "history".to_string(),
+            title: "History".to_string(),
+            artists: vec!["Artist".to_string()],
+            duration_ms: Some(180_000),
+            artwork_url: None,
+            web_url: url::Url::parse("https://soundcloud.com/test/history").unwrap(),
+            capability: crate::model::PlaybackCapability::Full,
+            genres: Vec::new(),
+            explicit: false,
+        }
     }
 }
