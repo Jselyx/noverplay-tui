@@ -7,6 +7,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($Version -notmatch '^[0-9][0-9A-Za-z.+~-]*$') {
+    throw "Версия не подходит для пакета: $Version"
+}
 $binaryPath = (Resolve-Path -LiteralPath $Binary).Path
 $licensePath = (Resolve-Path -LiteralPath "LICENSE").Path
 $outputPath = [IO.Path]::GetFullPath($OutputDir)
