@@ -13,7 +13,7 @@ use symphonia::core::{
 
 use crate::model::PlaybackSource;
 
-use super::{convert::convert_audio, http_source::HttpRangeSource, output::AudioChunk};
+use super::{convert::convert_audio, media::open_media, output::AudioChunk};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn decode_source(
@@ -26,23 +26,18 @@ pub(super) fn decode_source(
     chunks: &Sender<AudioChunk>,
     buffered_samples: &AtomicU64,
 ) -> Result<()> {
-    let media = HttpRangeSource::open(source.url.as_str(), &source.headers, source.supports_range)?;
+    let media = open_media(&source, position_ms)?;
     let stream = MediaSourceStream::new(
-        Box::new(media),
+        media.source,
         MediaSourceStreamOptions {
             buffer_len: 64 * 1024,
         },
     );
     let mut hint = Hint::new();
-    if let Some(extension) = source
-        .url
-        .path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .and_then(|name| name.rsplit_once('.').map(|(_, extension)| extension))
-    {
+    if let Some(extension) = media.extension.as_deref() {
         hint.with_extension(extension);
     }
-    if let Some(mime) = source.mime_type.as_deref() {
+    if let Some(mime) = media.mime_type.as_deref() {
         hint.mime_type(mime);
     }
     let mut format = symphonia::default::get_probe()
@@ -66,7 +61,7 @@ pub(super) fn decode_source(
         .make_audio_decoder(codec, &AudioDecoderOptions::default())
         .context("аудиокодек не поддерживается")?;
 
-    if position_ms > 0 {
+    if media.seek_in_format {
         let seconds = (position_ms / 1000) as i64;
         let nanos = ((position_ms % 1000) * 1_000_000) as u32;
         let time = Time::try_new(seconds, nanos).context("позиция перемотки слишком большая")?;
@@ -82,6 +77,11 @@ pub(super) fn decode_source(
         decoder.reset();
     }
 
+    let mut discard_samples = media
+        .discard_ms
+        .saturating_mul(output_rate as u64)
+        .saturating_mul(output_channels as u64)
+        / 1000;
     while current_generation.load(Ordering::Acquire) == generation {
         let Some(packet) = format
             .next_packet()
@@ -105,13 +105,21 @@ pub(super) fn decode_source(
         let input_rate = decoded.spec().rate();
         let mut samples = vec![0.0; decoded.samples_interleaved()];
         decoded.copy_to_slice_interleaved(&mut samples);
-        let samples = convert_audio(
+        let mut samples = convert_audio(
             &samples,
             input_channels,
             input_rate,
             output_channels,
             output_rate,
         );
+        if discard_samples > 0 {
+            let discard = (discard_samples as usize).min(samples.len());
+            samples.drain(..discard);
+            discard_samples -= discard as u64;
+            if samples.is_empty() {
+                continue;
+            }
+        }
         let sample_count = samples.len() as u64;
         buffered_samples.fetch_add(sample_count, Ordering::AcqRel);
         if chunks

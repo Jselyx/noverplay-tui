@@ -1,7 +1,9 @@
 mod convert;
 mod decoder;
 mod engine;
+mod hls;
 mod http_source;
+mod media;
 mod output;
 mod types;
 
