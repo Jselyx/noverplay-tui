@@ -43,6 +43,10 @@ pub trait MusicProvider: Send + Sync {
 
     async fn related(&self, track: &TrackRef, limit: usize) -> Result<Vec<TrackRef>>;
 
+    async fn personal_wave(&self, _limit: usize) -> Result<Vec<TrackRef>> {
+        Ok(Vec::new())
+    }
+
     async fn playback_source(&self, track: &TrackRef) -> Result<PlaybackSource>;
 }
 
@@ -209,5 +213,14 @@ mod tests {
         let results = registry.search_all("трек").await;
         assert_eq!(results[0].0, ProviderKind::SoundCloud);
         assert_eq!(results[1].0, ProviderKind::Deezer);
+    }
+
+    #[tokio::test]
+    async fn provider_without_personal_radio_returns_empty_batch() {
+        let provider = FakeProvider {
+            kind: ProviderKind::SoundCloud,
+            tracks: Vec::new(),
+        };
+        assert!(provider.personal_wave(40).await.unwrap().is_empty());
     }
 }

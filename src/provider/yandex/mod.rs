@@ -1,5 +1,6 @@
 mod client;
 mod mapping;
+mod personal;
 mod playback;
 mod playlist;
 mod playlist_tracks;
@@ -22,6 +23,7 @@ use crate::{
 };
 
 use client::build_client;
+use personal::personal_wave;
 use playback::poluchit_istochnik;
 use playlist::import_playlist;
 use related::related_tracks;
@@ -65,6 +67,10 @@ impl MusicProvider for YandexProvider {
 
     async fn related(&self, track: &TrackRef, limit: usize) -> Result<Vec<TrackRef>> {
         related_tracks(&self.client, track, limit).await
+    }
+
+    async fn personal_wave(&self, limit: usize) -> Result<Vec<TrackRef>> {
+        personal_wave(&self.client, limit).await
     }
 
     async fn playback_source(&self, track: &TrackRef) -> Result<PlaybackSource> {
