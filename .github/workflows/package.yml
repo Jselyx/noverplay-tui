@@ -1,0 +1,79 @@
+name: Пакеты
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Версия из Cargo.toml без v
+        required: true
+        default: 0.1.0
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Scoop и Windows zip
+    runs-on: windows-latest
+    env:
+      PACKAGE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Сверка версии
+        shell: pwsh
+        run: |
+          $cargoVersion = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          if ($cargoVersion -ne $env:PACKAGE_VERSION) { throw "Cargo.toml содержит $cargoVersion" }
+      - name: Сборка
+        run: cargo build --locked --release
+      - name: Проверка бинарника
+        run: target\release\noverplay.exe --version
+      - name: Упаковка
+        shell: pwsh
+        run: .\packaging\windows\package.ps1 -Binary target\release\noverplay.exe -Version $env:PACKAGE_VERSION
+      - uses: actions/upload-artifact@v7
+        with:
+          name: noverplay-windows-x86_64-${{ inputs.version }}
+          path: |
+            dist/noverplay-windows-x86_64.zip
+            dist/noverplay.json
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Deb и Linux tar.gz
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Системные зависимости
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Сверка версии
+        run: |
+          cargo_version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "$cargo_version" = "$PACKAGE_VERSION"
+      - name: Сборка
+        run: cargo build --locked --release
+      - name: Проверка бинарника
+        run: target/release/noverplay --version
+      - name: Упаковка
+        run: bash packaging/linux/package.sh target/release/noverplay "$PACKAGE_VERSION"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: noverplay-linux-x86_64-${{ inputs.version }}
+          path: |
+            dist/noverplay-linux-x86_64.tar.gz
+            dist/noverplay_${{ inputs.version }}_amd64.deb
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
