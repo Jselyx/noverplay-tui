@@ -23,6 +23,10 @@ pub enum Action {
         tracks: Vec<TrackRef>,
         failures: Vec<String>,
     },
+    WaveFinished {
+        tracks: Vec<TrackRef>,
+        failures: Vec<String>,
+    },
     AudioProgress {
         position_ms: u64,
         buffered_ms: u64,

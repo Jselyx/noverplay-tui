@@ -107,6 +107,8 @@ pub struct App {
     pub selected: usize,
     pub search_query: String,
     pub search_results: Vec<TrackRef>,
+    pub wave_tracks: Vec<TrackRef>,
+    pub wave_loading: bool,
     pub library: Vec<TrackRef>,
     pub playlists: Vec<Playlist>,
     pub queue: Vec<TrackRef>,
@@ -132,6 +134,8 @@ impl App {
             selected: 0,
             search_query: String::new(),
             search_results: Vec::new(),
+            wave_tracks: Vec::new(),
+            wave_loading: false,
             library: storage.library_tracks()?,
             playlists: storage.list_playlists()?,
             queue: queue.tracks,
@@ -159,6 +163,11 @@ impl App {
             Action::Navigate(screen) => {
                 self.screen = screen;
                 self.selected = 0;
+                if screen == Screen::Wave && self.wave_tracks.is_empty() && !self.wave_loading {
+                    self.wave_loading = true;
+                    self.status_message = "Собираем Мою волну".to_string();
+                    self.effects.push(AppEffect::GenerateWave);
+                }
             }
             Action::SelectPrevious => {
                 self.selected = self.selected.saturating_sub(1);
@@ -240,6 +249,24 @@ impl App {
                 tracks,
                 failures,
             } => self.finish_search(query, tracks, failures),
+            Action::WaveFinished { tracks, failures } => {
+                self.wave_tracks = tracks;
+                self.wave_loading = false;
+                self.selected = 0;
+                self.status_message = if self.wave_tracks.is_empty() && !failures.is_empty() {
+                    failures.join("; ")
+                } else if self.wave_tracks.is_empty() {
+                    "Волна пока пустая, послушай или лайкни несколько треков".to_string()
+                } else if failures.is_empty() {
+                    format!("В волне {} треков", self.wave_tracks.len())
+                } else {
+                    format!(
+                        "В волне {} треков, часть сервисов прилегла: {}",
+                        self.wave_tracks.len(),
+                        failures.join(", ")
+                    )
+                };
+            }
             Action::AudioProgress {
                 position_ms,
                 buffered_ms,
@@ -285,7 +312,8 @@ impl App {
     pub fn selected_tracks(&self) -> &[TrackRef] {
         match self.screen {
             Screen::Search => &self.search_results,
-            Screen::Library | Screen::Home | Screen::Wave => &self.library,
+            Screen::Wave => &self.wave_tracks,
+            Screen::Library | Screen::Home => &self.library,
             Screen::Queue => &self.queue,
             _ => &[],
         }
@@ -520,6 +548,33 @@ mod tests {
             app.take_effects().as_slice(),
             [AppEffect::Play(_)]
         ));
+    }
+
+    #[test]
+    fn opening_wave_starts_local_generation_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        app.handle(Action::Navigate(Screen::Wave));
+        app.handle(Action::Navigate(Screen::Wave));
+        assert!(app.wave_loading);
+        assert_eq!(app.take_effects(), vec![AppEffect::GenerateWave]);
+    }
+
+    #[test]
+    fn finished_wave_gets_its_own_list_instead_of_library_costume() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        app.handle(Action::Navigate(Screen::Wave));
+        app.handle(Action::WaveFinished {
+            tracks: vec![test_track()],
+            failures: Vec::new(),
+        });
+        assert_eq!(app.selected_tracks(), [test_track()]);
+        assert!(!app.wave_loading);
     }
 
     fn test_track() -> TrackRef {

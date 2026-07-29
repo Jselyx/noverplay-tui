@@ -7,6 +7,11 @@ pub(super) enum RuntimeMessage {
         tracks: Vec<TrackRef>,
         failures: Vec<String>,
     },
+    WaveFinished {
+        generation: u64,
+        tracks: Vec<TrackRef>,
+        failures: Vec<String>,
+    },
     PlaybackReady {
         generation: u64,
         source: PlaybackSource,

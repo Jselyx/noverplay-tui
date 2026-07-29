@@ -48,7 +48,7 @@ async fn run_tui() -> Result<()> {
     storage.initialize()?;
     let mut app = App::load(&storage, &config)?;
     let secrets = SecretStore::new(paths.secrets_file.clone());
-    let mut runtime = Runtime::new(&config, &secrets);
+    let mut runtime = Runtime::new(&config, &secrets, storage.clone());
     if let Some(notice) = runtime.take_notices().into_iter().last() {
         app.status_message = notice;
     }

@@ -145,7 +145,8 @@ fn draw_tracks(frame: &mut Frame<'_>, app: &App, area: Rect) {
     if tracks.is_empty() {
         let message = match app.screen {
             Screen::Search => "Напиши запрос и нажми Enter",
-            Screen::Wave => "Волна проснётся после первых прослушиваний",
+            Screen::Wave if app.wave_loading => "Собираем волну из истории и похожих треков",
+            Screen::Wave => "Послушай или лайкни несколько треков и зайди сюда снова",
             Screen::Queue => "Очередь пуста",
             _ => "Здесь пока тихо",
         };

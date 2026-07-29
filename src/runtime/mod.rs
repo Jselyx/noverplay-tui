@@ -2,6 +2,7 @@ mod message;
 mod playback;
 mod providers;
 mod search;
+mod wave;
 
 use std::{sync::Arc, time::Duration};
 
@@ -14,12 +15,14 @@ use crate::{
     effect::AppEffect,
     provider::ProviderRegistry,
     secrets::SecretStore,
+    storage::Storage,
 };
 
 use message::RuntimeMessage;
 use playback::spawn_playback;
 use providers::build_registry;
 use search::spawn_search;
+use wave::spawn_wave;
 
 pub struct Runtime {
     providers: Arc<ProviderRegistry>,
@@ -28,15 +31,18 @@ pub struct Runtime {
     receiver: mpsc::UnboundedReceiver<RuntimeMessage>,
     search_task: Option<JoinHandle<()>>,
     playback_task: Option<JoinHandle<()>>,
+    wave_task: Option<JoinHandle<()>>,
     search_generation: u64,
     playback_generation: u64,
+    wave_generation: u64,
     search_delay: Duration,
     last_audio_status: Option<AudioStatus>,
     notices: Vec<String>,
+    storage: Storage,
 }
 
 impl Runtime {
-    pub fn new(config: &AppConfig, secrets: &SecretStore) -> Self {
+    pub fn new(config: &AppConfig, secrets: &SecretStore, storage: Storage) -> Self {
         let setup = build_registry(config, secrets);
         let mut notices = setup.notices;
         let audio = match AudioEngine::new(config.audio_output.as_deref(), config.volume_percent) {
@@ -54,11 +60,14 @@ impl Runtime {
             receiver,
             search_task: None,
             playback_task: None,
+            wave_task: None,
             search_generation: 0,
             playback_generation: 0,
+            wave_generation: 0,
             search_delay: Duration::from_millis(config.search_debounce_ms),
             last_audio_status: None,
             notices,
+            storage,
         }
     }
 
@@ -73,6 +82,7 @@ impl Runtime {
                 AppEffect::Search { query, immediate } => {
                     self.start_search(query, immediate, &mut actions)
                 }
+                AppEffect::GenerateWave => self.start_wave(&mut actions),
                 AppEffect::Play(track) => self.start_playback(*track, &mut actions),
                 AppEffect::Pause => {
                     if let Some(audio) = &self.audio {
@@ -138,6 +148,13 @@ impl Runtime {
                     if generation == self.playback_generation =>
                 {
                     actions.push(Action::PlaybackFailed(error));
+                }
+                RuntimeMessage::WaveFinished {
+                    generation,
+                    tracks,
+                    failures,
+                } if generation == self.wave_generation => {
+                    actions.push(Action::WaveFinished { tracks, failures });
                 }
                 _ => {}
             }
@@ -205,8 +222,44 @@ impl Runtime {
         ));
     }
 
+    fn start_wave(&mut self, actions: &mut Vec<Action>) {
+        if let Some(task) = self.wave_task.take() {
+            task.abort();
+        }
+        self.wave_generation = self.wave_generation.wrapping_add(1);
+        let primary_provider = if self
+            .providers
+            .get(crate::model::ProviderKind::YandexMusic)
+            .is_some()
+        {
+            crate::model::ProviderKind::YandexMusic
+        } else if self
+            .providers
+            .get(crate::model::ProviderKind::SoundCloud)
+            .is_some()
+        {
+            crate::model::ProviderKind::SoundCloud
+        } else {
+            actions.push(Action::WaveFinished {
+                tracks: Vec::new(),
+                failures: vec!["Для волны настрой Yandex Music или SoundCloud".to_string()],
+            });
+            return;
+        };
+        self.wave_task = Some(spawn_wave(
+            Arc::clone(&self.providers),
+            self.storage.clone(),
+            self.sender.clone(),
+            self.wave_generation,
+            primary_provider,
+        ));
+    }
+
     fn cancel_playback(&mut self) {
         if let Some(task) = self.playback_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.wave_task.take() {
             task.abort();
         }
         self.playback_generation = self.playback_generation.wrapping_add(1);
@@ -238,11 +291,14 @@ mod tests {
             receiver,
             search_task: None,
             playback_task: None,
+            wave_task: None,
             search_generation: 7,
             playback_generation: 3,
+            wave_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,
             notices: Vec::new(),
+            storage: Storage::new(std::path::PathBuf::from("unused.sqlite3")),
         };
         sender
             .send(RuntimeMessage::SearchFinished {
@@ -258,6 +314,13 @@ mod tests {
                 error: "старьё".to_string(),
             })
             .unwrap();
+        sender
+            .send(RuntimeMessage::WaveFinished {
+                generation: 1,
+                tracks: Vec::new(),
+                failures: vec!["старьё".to_string()],
+            })
+            .unwrap();
         assert!(runtime.poll_actions().is_empty());
     }
 
@@ -271,11 +334,14 @@ mod tests {
             receiver,
             search_task: None,
             playback_task: None,
+            wave_task: None,
             search_generation: 0,
             playback_generation: 0,
+            wave_generation: 0,
             search_delay: Duration::from_secs(1),
             last_audio_status: None,
             notices: Vec::new(),
+            storage: Storage::new(std::path::PathBuf::from("unused.sqlite3")),
         };
         let actions = runtime.dispatch(vec![AppEffect::Search {
             query: String::new(),
@@ -285,6 +351,33 @@ mod tests {
             actions.as_slice(),
             [Action::SearchFinished { query, tracks, failures }]
                 if query.is_empty() && tracks.is_empty() && failures.is_empty()
+        ));
+    }
+
+    #[test]
+    fn wave_without_configured_provider_finishes_instead_of_hanging() {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let mut runtime = Runtime {
+            providers: Arc::new(ProviderRegistry::default()),
+            audio: None,
+            sender,
+            receiver,
+            search_task: None,
+            playback_task: None,
+            wave_task: None,
+            search_generation: 0,
+            playback_generation: 0,
+            wave_generation: 0,
+            search_delay: Duration::ZERO,
+            last_audio_status: None,
+            notices: Vec::new(),
+            storage: Storage::new(std::path::PathBuf::from("unused.sqlite3")),
+        };
+        let actions = runtime.dispatch(vec![AppEffect::GenerateWave]);
+        assert!(matches!(
+            actions.as_slice(),
+            [Action::WaveFinished { tracks, failures }]
+                if tracks.is_empty() && failures.len() == 1
         ));
     }
 }
