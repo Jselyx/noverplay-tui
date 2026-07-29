@@ -4,6 +4,8 @@ use noverplay_tui::{
     app::{App, Modal, Screen},
     config::{AppConfig, AppPaths},
     event::EventPump,
+    runtime::Runtime,
+    secrets::SecretStore,
     storage::Storage,
     terminal::TerminalGuard,
     ui,
@@ -45,10 +47,16 @@ async fn run_tui() -> Result<()> {
     let storage = Storage::new(paths.database_file.clone());
     storage.initialize()?;
     let mut app = App::load(&storage, &config)?;
+    let secrets = SecretStore::new(paths.secrets_file.clone());
+    let mut runtime = Runtime::new(&config, &secrets);
+    if let Some(notice) = runtime.take_notices().into_iter().last() {
+        app.status_message = notice;
+    }
     let mut terminal = TerminalGuard::enter()?;
-    let mut events = EventPump::new();
+    let mut events = EventPump::with_frame_limit(config.frame_limit);
 
     while !app.should_quit {
+        drive_runtime(&mut app, &mut runtime);
         if app.dirty {
             terminal
                 .terminal_mut()
@@ -56,9 +64,13 @@ async fn run_tui() -> Result<()> {
             app.dirty = false;
         }
         let search_mode = app.screen == Screen::Search && app.modal.is_none();
+        let search_has_results = search_mode && !app.search_results.is_empty();
         let onboarding_open = app.modal == Some(Modal::Onboarding);
-        let action = events.next(search_mode, app.modal.is_some()).await;
+        let action = events
+            .next(search_mode, app.modal.is_some(), search_has_results)
+            .await;
         app.handle(action);
+        drive_runtime(&mut app, &mut runtime);
         if onboarding_open && app.modal.is_none() {
             config.onboarding_completed = true;
             config.guest_mode = true;
@@ -75,4 +87,18 @@ async fn run_tui() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn drive_runtime(app: &mut App, runtime: &mut Runtime) {
+    loop {
+        let mut actions = runtime.poll_actions();
+        let effects = app.take_effects();
+        if actions.is_empty() && effects.is_empty() {
+            break;
+        }
+        actions.extend(runtime.dispatch(effects));
+        for action in actions {
+            app.handle(action);
+        }
+    }
 }

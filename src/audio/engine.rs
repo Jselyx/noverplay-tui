@@ -148,13 +148,17 @@ impl AudioEngine {
     }
 
     pub fn stop(&self) {
+        self.reset();
+        let _ = self.event_tx.send(AudioEvent::Stopped);
+    }
+
+    pub fn reset(&self) {
         self.generation.fetch_add(1, Ordering::AcqRel);
         self.played_samples.store(0, Ordering::Release);
         self.buffered_samples.store(0, Ordering::Release);
         if let Ok(mut current) = self.source.lock() {
             *current = None;
         }
-        let _ = self.event_tx.send(AudioEvent::Stopped);
     }
 
     pub fn set_volume(&self, volume_percent: u8) {

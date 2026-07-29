@@ -244,7 +244,11 @@ impl App {
                 position_ms,
                 buffered_ms,
             } => {
-                self.player.position_ms = position_ms.min(self.player.duration_ms);
+                self.player.position_ms = if self.player.duration_ms == 0 {
+                    position_ms
+                } else {
+                    position_ms.min(self.player.duration_ms)
+                };
                 self.player.buffered_ms = buffered_ms;
             }
             Action::Audio(event) => self.handle_audio_event(event),
@@ -296,9 +300,11 @@ impl App {
 
     fn schedule_search(&mut self, immediate: bool) {
         let query = self.search_query.trim().to_string();
-        if query.is_empty() {
+        if query.is_empty() || !immediate {
             self.search_results.clear();
             self.selected = 0;
+        }
+        if query.is_empty() {
             self.status_message = "Введите запрос".to_string();
         }
         self.effects.push(AppEffect::Search { query, immediate });
@@ -310,7 +316,9 @@ impl App {
         }
         self.search_results = tracks;
         self.selected = 0;
-        self.status_message = if self.search_results.is_empty() && !failures.is_empty() {
+        self.status_message = if query.is_empty() {
+            "Введите запрос".to_string()
+        } else if self.search_results.is_empty() && !failures.is_empty() {
             failures.join("; ")
         } else if failures.is_empty() {
             format!("Найдено: {}", self.search_results.len())

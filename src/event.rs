@@ -13,19 +13,29 @@ pub struct EventPump {
 
 impl EventPump {
     pub fn new() -> Self {
+        Self::with_frame_limit(30)
+    }
+
+    pub fn with_frame_limit(frame_limit: u16) -> Self {
+        let frame_limit = u64::from(frame_limit.clamp(10, 60));
         Self {
             terminal: EventStream::new(),
-            tick: interval(Duration::from_secs(1)),
+            tick: interval(Duration::from_millis(1_000 / frame_limit)),
         }
     }
 
-    pub async fn next(&mut self, search_mode: bool, modal_open: bool) -> Action {
+    pub async fn next(
+        &mut self,
+        search_mode: bool,
+        modal_open: bool,
+        search_has_results: bool,
+    ) -> Action {
         tokio::select! {
             _ = self.tick.tick() => Action::Tick,
             event = self.terminal.next() => {
                 match event {
                     Some(Ok(CrosstermEvent::Key(key))) if key.is_press() => {
-                        map_key(key, search_mode, modal_open)
+                        map_key(key, search_mode, modal_open, search_has_results)
                     }
                     Some(Ok(CrosstermEvent::Resize(_, _))) => Action::Resize,
                     Some(Ok(CrosstermEvent::Mouse(mouse))) => match mouse.kind {
@@ -46,7 +56,7 @@ impl Default for EventPump {
     }
 }
 
-fn map_key(key: KeyEvent, search_mode: bool, modal_open: bool) -> Action {
+fn map_key(key: KeyEvent, search_mode: bool, modal_open: bool, search_has_results: bool) -> Action {
     // да тут много клавиш, терминал сам их телепатией не распарсит АЛЛООООО 🤡
     if modal_open {
         return match key.code {
@@ -55,9 +65,13 @@ fn map_key(key: KeyEvent, search_mode: bool, modal_open: bool) -> Action {
             _ => Action::Resize,
         };
     }
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('k') {
+        return Action::OpenCommandPalette;
+    }
     if search_mode {
         return match key.code {
             KeyCode::Esc => Action::Navigate(Screen::Home),
+            KeyCode::Enter if search_has_results => Action::Activate,
             KeyCode::Enter => Action::SubmitSearch,
             KeyCode::Backspace => Action::SearchBackspace,
             KeyCode::Up => Action::SelectPrevious,
@@ -65,9 +79,6 @@ fn map_key(key: KeyEvent, search_mode: bool, modal_open: bool) -> Action {
             KeyCode::Char(value) => Action::SearchInput(value),
             _ => Action::Resize,
         };
-    }
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('k') {
-        return Action::OpenCommandPalette;
     }
     match key.code {
         KeyCode::Char('q') => Action::Quit,
@@ -94,5 +105,23 @@ fn map_key(key: KeyEvent, search_mode: bool, modal_open: bool) -> Action {
         KeyCode::Char('8') => Action::Navigate(Screen::Settings),
         KeyCode::Enter => Action::Activate,
         _ => Action::Resize,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enter_activates_ready_search_result() {
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(map_key(key, true, false, true), Action::Activate);
+        assert_eq!(map_key(key, true, false, false), Action::SubmitSearch);
+    }
+
+    #[test]
+    fn command_palette_survives_search_input_mode() {
+        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+        assert_eq!(map_key(key, true, false, false), Action::OpenCommandPalette);
     }
 }
