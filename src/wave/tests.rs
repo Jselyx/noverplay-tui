@@ -4,7 +4,10 @@ use crate::{
 };
 use url::Url;
 
-use super::{WaveMode, WaveMood, WaveQueueQuotas, WaveSettings, WaveSourceMode, WaveTasteProfile};
+use super::{
+    WaveCandidate, WaveCandidateOrigin, WaveGenreProfile, WaveMode, WaveMood, WaveQueueQuotas,
+    WaveSettings, WaveSourceMode, WaveTasteProfile,
+};
 
 #[test]
 fn pc_mode_aliases_stay_compatible() {
@@ -116,6 +119,42 @@ fn profile_counts_repeats_and_cooldown_like_pc() {
     let cooldown = profile.cooldown_keys(now, 24);
     assert!(cooldown.contains("SoundCloud:1"));
     assert!(cooldown.contains("SoundCloud:2"));
+}
+
+#[test]
+fn candidate_filter_throws_video_and_podcast_in_the_bin() {
+    let mut video = track("video", "Artist");
+    video.title = "Song Official Video".to_string();
+    assert!(!WaveCandidate::new(video, WaveCandidateOrigin::Seed).is_tracklike());
+    let mut podcast = track("podcast", "Podcast Author");
+    podcast.title = "Episode 10".to_string();
+    assert!(!WaveCandidate::new(podcast, WaveCandidateOrigin::Seed).is_tracklike());
+    assert!(WaveCandidate::new(track("song", "Artist"), WaveCandidateOrigin::Seed).is_tracklike());
+}
+
+#[test]
+fn candidate_bucket_keeps_pc_precedence() {
+    let mut candidate = WaveCandidate::new(track("1", "Artist"), WaveCandidateOrigin::Related);
+    candidate.add_origin(WaveCandidateOrigin::Explore);
+    candidate.add_origin(WaveCandidateOrigin::Comfort);
+    assert_eq!(candidate.bucket(), super::WaveBucket::Favorites);
+}
+
+#[test]
+fn genre_similarity_uses_the_same_weighted_pc_tags() {
+    let mut rock = track("rock", "Artist");
+    rock.title = "Night Rock".to_string();
+    let mut jazz = track("jazz", "Artist");
+    jazz.title = "Quiet Jazz".to_string();
+    let profile = WaveGenreProfile::from_tracks(&[
+        rock.clone(),
+        rock.clone(),
+        rock.clone(),
+        rock.clone(),
+        jazz.clone(),
+    ]);
+    assert!(profile.similarity(&rock) > profile.similarity(&jazz));
+    assert_eq!(profile.similarity(&track("plain", "Artist")), 0.0);
 }
 
 fn history(track: TrackRef, played_at_ms: i64) -> HistoryEntry {
