@@ -3,6 +3,7 @@ pub mod app;
 pub mod audio;
 pub mod cli;
 pub mod config;
+pub mod credentials;
 pub mod effect;
 pub mod event;
 pub mod model;

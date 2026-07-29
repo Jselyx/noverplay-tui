@@ -55,7 +55,7 @@ impl SecretStore {
     }
 
     #[cfg(test)]
-    fn file_only(fallback_file: PathBuf) -> Self {
+    pub(crate) fn file_only(fallback_file: PathBuf) -> Self {
         Self {
             fallback_file,
             system_enabled: false,
