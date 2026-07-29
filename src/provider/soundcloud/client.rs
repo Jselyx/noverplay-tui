@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use reqwest::Client;
+use reqwest::{Client, ClientBuilder};
 use serde::de::DeserializeOwned;
 use url::Url;
 
@@ -12,17 +12,24 @@ pub(super) struct SoundCloudClient {
 
 impl SoundCloudClient {
     pub(super) fn new(client_id: String) -> Result<Self> {
-        Self::with_base(client_id, Url::parse("https://api-v2.soundcloud.com/")?)
+        Self::from_parts(
+            client_id,
+            Url::parse("https://api-v2.soundcloud.com/")?,
+            build_http(Client::builder())?,
+        )
     }
 
+    #[cfg(test)]
     pub(super) fn with_base(client_id: String, api_v2: Url) -> Result<Self> {
+        // Пул увидел полуживой мок-сокет и решил устроить лотерею, в тестах этот балаган закрыт
+        let http = build_http(Client::builder().pool_max_idle_per_host(0))?;
+        Self::from_parts(client_id, api_v2, http)
+    }
+
+    fn from_parts(client_id: String, api_v2: Url, http: Client) -> Result<Self> {
         if client_id.trim().is_empty() {
             bail!("нужен client_id SoundCloud")
         }
-        let http = Client::builder()
-            .user_agent(format!("noverplay-tui/{}", crate::APP_VERSION))
-            .build()
-            .context("не удалось создать HTTP-клиент SoundCloud")?;
         Ok(Self {
             http,
             client_id,
@@ -53,6 +60,13 @@ impl SoundCloudClient {
             .await
             .context("SoundCloud вернул непонятный JSON")
     }
+}
+
+fn build_http(builder: ClientBuilder) -> Result<Client> {
+    builder
+        .user_agent(format!("noverplay-tui/{}", crate::APP_VERSION))
+        .build()
+        .context("не удалось создать HTTP-клиент SoundCloud")
 }
 
 fn append_path(mut base: Url, path: &[&str]) -> Result<Url> {
