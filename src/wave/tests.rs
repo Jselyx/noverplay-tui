@@ -8,8 +8,8 @@ use url::Url;
 
 use super::{
     WaveCandidate, WaveCandidateOrigin, WaveGenreProfile, WaveMode, WaveMood, WaveQueueQuotas,
-    WaveRankInput, WaveReason, WaveSettings, WaveSourceMode, WaveTasteProfile, rank_candidates,
-    select_ranked,
+    WaveRankInput, WaveReason, WaveSettings, WaveSourceMode, WaveTasteProfile, WaveTimeOfDay,
+    rank_candidates, select_ranked,
 };
 
 #[test]
@@ -22,6 +22,10 @@ fn pc_mode_aliases_stay_compatible() {
     assert_eq!(
         WaveSourceMode::normalize(Some("mix")),
         WaveSourceMode::FallbackSoft
+    );
+    assert_eq!(
+        WaveTimeOfDay::normalize(Some("evening")),
+        WaveTimeOfDay::Evening
     );
 }
 
@@ -272,6 +276,34 @@ fn selector_rotates_language_then_falls_back_like_pc() {
     );
     assert_eq!(selected[0].track.id, "ru");
     assert_eq!(selected[1].track.id, "en");
+}
+
+#[test]
+fn explore_queries_keep_pc_order_and_novelty_limit() {
+    let settings = WaveSettings {
+        mode: WaveMode::Discovery,
+        mood: WaveMood::Drive,
+        time_of_day: WaveTimeOfDay::Night,
+        novelty: 0.8,
+        language_rotation: vec!["en".to_string()],
+        ..WaveSettings::default()
+    };
+    let queries = super::explore_queries(&[], &settings);
+    assert_eq!(queries.len(), 7);
+    assert_eq!(queries[0], "new tracks");
+    assert!(queries.contains(&"high energy songs".to_string()));
+}
+
+#[test]
+fn title_keywords_drop_pc_stop_words_and_duplicates() {
+    let mut first = track("one", "Artist");
+    first.title = "Official Winter Winter Remix".to_string();
+    let mut second = track("two", "Artist");
+    second.title = "Night Winter".to_string();
+    assert_eq!(
+        super::recent_title_keywords(&[first, second], 5),
+        ["winter", "night"]
+    );
 }
 
 fn history(track: TrackRef, played_at_ms: i64) -> HistoryEntry {

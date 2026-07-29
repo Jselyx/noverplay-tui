@@ -60,6 +60,33 @@ pub enum WaveSourceMode {
     LibraryOnly,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WaveTimeOfDay {
+    #[default]
+    Auto,
+    Morning,
+    Day,
+    Evening,
+    Night,
+}
+
+impl WaveTimeOfDay {
+    pub fn normalize(value: Option<&str>) -> Self {
+        match value
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "morning" => Self::Morning,
+            "day" => Self::Day,
+            "evening" => Self::Evening,
+            "night" => Self::Night,
+            _ => Self::Auto,
+        }
+    }
+}
+
 impl WaveSourceMode {
     pub fn normalize(value: Option<&str>) -> Self {
         match value
@@ -79,6 +106,7 @@ impl WaveSourceMode {
 pub struct WaveSettings {
     pub mode: WaveMode,
     pub mood: WaveMood,
+    pub time_of_day: WaveTimeOfDay,
     pub source_mode: WaveSourceMode,
     pub primary_provider: ProviderKind,
     pub size: usize,
@@ -95,6 +123,7 @@ impl Default for WaveSettings {
         Self {
             mode: WaveMode::Balanced,
             mood: WaveMood::Auto,
+            time_of_day: WaveTimeOfDay::Auto,
             source_mode: WaveSourceMode::CurrentService,
             primary_provider: ProviderKind::YandexMusic,
             size: 40,
