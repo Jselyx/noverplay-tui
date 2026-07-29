@@ -1,3 +1,5 @@
+mod onboarding;
+
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -348,13 +350,14 @@ fn draw_player(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn draw_modal(frame: &mut Frame<'_>, modal: &Modal, area: Rect) {
+    if let Modal::Onboarding(state) = modal {
+        onboarding::draw(frame, state, area);
+        return;
+    }
     let popup = centered_rect(64, 60, area);
     frame.render_widget(Clear, popup);
     let (title, body) = match modal {
-        Modal::Onboarding(_) => (
-            " Быстрая настройка ",
-            "Добро пожаловать в Noverplay\n\nEnter  начать настройку\nEsc    продолжить без неё",
-        ),
+        Modal::Onboarding(_) => unreachable!(),
         Modal::Help => (
             " Клавиши ",
             "1-8 разделы    / поиск\n↑↓ или jk выбор   Enter открыть\nSpace пауза       n/p следующий/предыдущий\n←→ или hl ±10 сек  +/- громкость\ns перемешивание   r повтор\nq выход           Esc закрыть",
@@ -451,6 +454,54 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, &app)).unwrap();
         assert!(terminal.backend().to_string().contains("Главная"));
+    }
+
+    #[test]
+    fn onboarding_renders_real_steps_instead_of_one_dead_button() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        app.handle(crate::action::Action::AcceptOnboarding);
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+
+        let content = terminal.backend().to_string();
+        assert!(content.contains("Как запускаемся"));
+        assert!(content.contains("Гостевой режим"));
+        assert!(content.contains("2/4"));
+        assert!(terminal.backend().buffer().content().iter().all(|cell| {
+            matches!(
+                cell.fg,
+                Color::Reset | Color::Black | Color::White | Color::Gray | Color::DarkGray
+            ) && matches!(
+                cell.bg,
+                Color::Reset | Color::Black | Color::White | Color::Gray | Color::DarkGray
+            )
+        }));
+    }
+
+    #[test]
+    fn blocked_soundcloud_screen_shows_all_three_choices() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        if let Some(Modal::Onboarding(state)) = app.modal.as_mut() {
+            state.step = crate::onboarding::OnboardingStep::ZapretChoice;
+            state.soundcloud_problem = Some("соединение закрыто".to_string());
+        }
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+
+        let content = terminal.backend().to_string();
+        assert!(content.contains("Автоматически добавить домены"));
+        assert!(content.contains("Показать ручную инструкцию"));
+        assert!(content.contains("Пропустить"));
     }
 
     #[test]
