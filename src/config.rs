@@ -58,6 +58,8 @@ pub struct AppConfig {
     pub frame_limit: u16,
     pub onboarding_completed: bool,
     pub guest_mode: bool,
+    pub soundcloud_enabled: bool,
+    pub yandex_enabled: bool,
     pub soundcloud_client_id_override: Option<String>,
     pub soundcloud_client_id_refresh_at_ms: Option<i64>,
 }
@@ -75,6 +77,8 @@ impl Default for AppConfig {
             frame_limit: 30,
             onboarding_completed: false,
             guest_mode: false,
+            soundcloud_enabled: true,
+            yandex_enabled: true,
             soundcloud_client_id_override: None,
             soundcloud_client_id_refresh_at_ms: None,
         }
