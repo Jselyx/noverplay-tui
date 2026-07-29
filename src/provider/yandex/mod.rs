@@ -3,6 +3,7 @@ mod mapping;
 mod playlist;
 mod playlist_tracks;
 mod playlist_url;
+mod related;
 mod search;
 mod user;
 mod uuid_playlist;
@@ -21,6 +22,7 @@ use crate::{
 
 use client::build_client;
 use playlist::import_playlist;
+use related::related_tracks;
 use search::search_tracks;
 
 pub use mapping::normalizovat_track;
@@ -59,8 +61,8 @@ impl MusicProvider for YandexProvider {
         import_playlist(&self.client, url).await
     }
 
-    async fn related(&self, _track: &TrackRef, _limit: usize) -> Result<Vec<TrackRef>> {
-        bail!("рекомендации Yandex Music еще не подключены")
+    async fn related(&self, track: &TrackRef, limit: usize) -> Result<Vec<TrackRef>> {
+        related_tracks(&self.client, track, limit).await
     }
 
     async fn playback_source(&self, _track: &TrackRef) -> Result<PlaybackSource> {
