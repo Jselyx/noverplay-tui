@@ -236,6 +236,22 @@ impl Storage {
         )
     }
 
+    pub fn liked_tracks_with_time(&self) -> Result<Vec<(TrackRef, i64)>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT track_json, liked_at_ms FROM library_tracks ORDER BY liked_at_ms DESC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut tracks = Vec::new();
+        for row in rows {
+            let (track, liked_at_ms) = row?;
+            tracks.push((decode_track(&track)?, liked_at_ms));
+        }
+        Ok(tracks)
+    }
+
     pub fn record_history(&self, entry: &HistoryEntry) -> Result<()> {
         self.connection()?.execute(
             "
@@ -465,5 +481,18 @@ mod tests {
         storage.save_queue(&queue).unwrap();
         assert_eq!(storage.recent_history(10).unwrap().len(), 1);
         assert_eq!(storage.load_queue().unwrap(), queue);
+    }
+
+    #[test]
+    fn wave_reads_real_like_timestamps_instead_of_inventing_them() {
+        let (_temp, storage) = storage();
+        let first = track("first");
+        let second = track("second");
+        storage.like_track(&first, 10).unwrap();
+        storage.like_track(&second, 20).unwrap();
+        assert_eq!(
+            storage.liked_tracks_with_time().unwrap(),
+            [(second, 20), (first, 10)]
+        );
     }
 }
