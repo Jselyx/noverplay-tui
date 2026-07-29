@@ -73,6 +73,7 @@ pub struct ScPlaylist {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
 pub struct ScCollection<T> {
     #[serde(default)]
     pub collection: Vec<T>,
