@@ -9,6 +9,7 @@ use crate::{
         state::{AccountDialog, AccountDialogStage, AccountState},
     },
     action::Action,
+    command_palette::{CommandPalette, PaletteCommand},
     config::AppConfig,
     credentials::{CredentialEditor, CredentialKind, CredentialState},
     effect::AppEffect,
@@ -111,7 +112,7 @@ pub enum Modal {
     PlaylistImport(Box<PlaylistImportEditor>),
     Account(Box<AccountDialog>),
     Help,
-    CommandPalette,
+    CommandPalette(Box<CommandPalette>),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -353,7 +354,7 @@ impl App {
                 self.status_message = format!("Не удалось включить трек: {error}");
             }
             Action::OpenHelp => self.modal = Some(Modal::Help),
-            Action::OpenCommandPalette => self.modal = Some(Modal::CommandPalette),
+            Action::OpenCommandPalette => self.modal = Some(Modal::CommandPalette(Box::default())),
             Action::OpenPlaylistImport => {
                 self.modal = Some(Modal::PlaylistImport(Box::default()));
                 self.status_message = "Вставь ссылку на плейлист SoundCloud или Yandex".to_string();
@@ -749,11 +750,24 @@ impl App {
                 }
                 AccountDialogStage::LoadingCaptcha | AccountDialogStage::Submitting => {}
             },
+            Some(Modal::CommandPalette(state)) => {
+                let command = state.command();
+                self.modal = None;
+                self.run_palette_command(command);
+            }
             _ => self.close_modal(),
         }
     }
 
     fn move_modal_selection(&mut self, next: bool) {
+        if let Some(Modal::CommandPalette(state)) = self.modal.as_mut() {
+            if next {
+                state.next();
+            } else {
+                state.previous();
+            }
+            return;
+        }
         if let Some(Modal::Account(dialog)) = self.modal.as_mut() {
             if next {
                 dialog.select_next();
@@ -781,6 +795,31 @@ impl App {
             state.toggle();
             OnboardingCommand::None
         });
+    }
+
+    fn run_palette_command(&mut self, command: PaletteCommand) {
+        match command {
+            PaletteCommand::Search => {
+                self.screen = Screen::Search;
+                self.selected = 0;
+            }
+            PaletteCommand::ImportPlaylist => {
+                self.modal = Some(Modal::PlaylistImport(Box::default()));
+                self.status_message = "Вставь ссылку на плейлист SoundCloud или Yandex".to_string();
+            }
+            PaletteCommand::Profile => {
+                self.screen = Screen::Profile;
+                self.selected = 0;
+            }
+            PaletteCommand::Settings => {
+                self.screen = Screen::Settings;
+                self.selected = 0;
+            }
+            PaletteCommand::ProbeSoundCloud => {
+                self.status_message = "Проверяем доступ к SoundCloud".to_string();
+                self.effects.push(AppEffect::ProbeSoundCloud);
+            }
+        }
     }
 
     fn input_modal(&mut self, value: char) {
@@ -1145,6 +1184,30 @@ mod tests {
         let mut app = App::load(&storage, &AppConfig::default()).unwrap();
         app.handle(Action::SelectNext);
         assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn command_palette_runs_the_selected_command_instead_of_being_a_poster() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(
+            &storage,
+            &AppConfig {
+                onboarding_completed: true,
+                ..AppConfig::default()
+            },
+        )
+        .unwrap();
+        app.handle(Action::OpenCommandPalette);
+        for _ in 0..3 {
+            app.handle(Action::ModalNext);
+        }
+
+        app.handle(Action::ModalSubmit);
+
+        assert_eq!(app.screen, Screen::Settings);
+        assert!(app.modal.is_none());
     }
 
     #[test]

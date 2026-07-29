@@ -3,6 +3,7 @@ pub mod action;
 pub mod app;
 pub mod audio;
 pub mod cli;
+pub mod command_palette;
 pub mod config;
 pub mod credentials;
 pub mod effect;

@@ -1,4 +1,5 @@
 mod account;
+mod command_palette;
 mod credential;
 mod import;
 mod onboarding;
@@ -414,6 +415,10 @@ fn draw_modal(frame: &mut Frame<'_>, app: &App, modal: &Modal, area: Rect) {
         account::draw(frame, dialog, area);
         return;
     }
+    if let Modal::CommandPalette(state) = modal {
+        command_palette::draw(frame, state, area);
+        return;
+    }
     let popup = centered_rect(64, 60, area);
     frame.render_widget(Clear, popup);
     let (title, body) = match modal {
@@ -425,10 +430,7 @@ fn draw_modal(frame: &mut Frame<'_>, app: &App, modal: &Modal, area: Rect) {
             " Клавиши ",
             "1-8 разделы    / поиск\ni импорт          f лайк\nEnter открыть или войти\nEsc назад          ↑↓ или jk выбор\nSpace пауза        n/p трек\n←→ или hl ±10 сек  +/- громкость\ns/r режимы         x выйти из аккаунта\nF2 вход/регистрация, мышь CAPTCHA\nq выход",
         ),
-        Modal::CommandPalette => (
-            " Команды ",
-            "Поиск\nИмпорт плейлиста\nВойти в аккаунт\nНастроить сервисы\nПроверить SoundCloud",
-        ),
+        Modal::CommandPalette(_) => unreachable!(),
     };
     frame.render_widget(
         Paragraph::new(body)
@@ -638,5 +640,19 @@ mod tests {
         assert!(content.contains("F2"));
         assert!(content.contains("User123"));
         assert!(!content.contains("password123"));
+    }
+
+    #[test]
+    fn command_palette_lists_actions_and_selection() {
+        let (_temp, mut app) = app();
+        app.modal = Some(Modal::CommandPalette(Box::default()));
+        let backend = TestBackend::new(100, 28);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+
+        let content = terminal.backend().to_string();
+        assert!(content.contains("Импорт плейлиста"));
+        assert!(content.contains("Проверить доступ к SoundCloud"));
     }
 }
