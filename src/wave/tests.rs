@@ -1,6 +1,10 @@
-use crate::model::ProviderKind;
+use crate::{
+    model::{PlaybackCapability, ProviderKind, TrackRef},
+    storage::HistoryEntry,
+};
+use url::Url;
 
-use super::{WaveMode, WaveMood, WaveQueueQuotas, WaveSettings, WaveSourceMode};
+use super::{WaveMode, WaveMood, WaveQueueQuotas, WaveSettings, WaveSourceMode, WaveTasteProfile};
 
 #[test]
 fn pc_mode_aliases_stay_compatible() {
@@ -70,4 +74,70 @@ fn wave_settings_clamp_like_pc_and_skip_deezer() {
         settings.provider_order(),
         [ProviderKind::YandexMusic, ProviderKind::SoundCloud]
     );
+}
+
+#[test]
+fn profile_uses_pc_windows_and_unique_recent_tracks() {
+    let now = 2_000_000_000_000_i64;
+    let history = vec![
+        history(track("1", "Artist A"), now - 1_000),
+        history(track("1", "Artist A"), now - 2_000),
+        history(track("2", "Artist B"), now - 15 * 86_400_000),
+    ];
+    let liked = vec![
+        (track("3", "Artist A"), now - 1_000),
+        (track("4", "Artist C"), now - 31 * 86_400_000),
+    ];
+    let profile = WaveTasteProfile::build(&history, &liked, now);
+    assert_eq!(profile.recent_tracks.len(), 2);
+    assert_eq!(profile.recent_top_artists, [("artist a".to_string(), 2)]);
+    assert_eq!(
+        profile.all_top_artists,
+        [("artist a".to_string(), 2), ("artist b".to_string(), 1)]
+    );
+    assert_eq!(
+        profile.liked_top_artists_recent,
+        [("artist a".to_string(), 1)]
+    );
+    assert!(profile.liked_artist_ids.contains("artist c"));
+}
+
+#[test]
+fn profile_counts_repeats_and_cooldown_like_pc() {
+    let now = 2_000_000_000_000_i64;
+    let history = vec![
+        history(track("1", "Artist A"), now - 30 * 60_000),
+        history(track("1", "Artist A"), now - 25 * 3_600_000),
+        history(track("2", "Artist B"), now - 2 * 3_600_000),
+    ];
+    let profile = WaveTasteProfile::build(&history, &[], now);
+    assert_eq!(profile.play_counts_since(now - 24 * 3_600_000).len(), 2);
+    assert_eq!(profile.play_counts_since(0).values().sum::<i64>(), 3);
+    let cooldown = profile.cooldown_keys(now, 24);
+    assert!(cooldown.contains("SoundCloud:1"));
+    assert!(cooldown.contains("SoundCloud:2"));
+}
+
+fn history(track: TrackRef, played_at_ms: i64) -> HistoryEntry {
+    HistoryEntry {
+        track,
+        played_at_ms,
+        completed: true,
+        skipped: false,
+    }
+}
+
+fn track(id: &str, artist: &str) -> TrackRef {
+    TrackRef {
+        provider: ProviderKind::SoundCloud,
+        id: id.to_string(),
+        title: format!("Track {id}"),
+        artists: vec![artist.to_string()],
+        duration_ms: Some(180_000),
+        artwork_url: None,
+        web_url: Url::parse(&format!("https://soundcloud.com/artist/{id}")).unwrap(),
+        capability: PlaybackCapability::Full,
+        genres: Vec::new(),
+        explicit: false,
+    }
 }
