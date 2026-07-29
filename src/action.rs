@@ -16,6 +16,7 @@ use crate::{
 pub enum Action {
     Quit,
     Navigate(Screen),
+    Back,
     SelectPrevious,
     SelectNext,
     Activate,

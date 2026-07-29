@@ -212,6 +212,10 @@ fn track_item((index, track): (usize, &TrackRef), liked: bool) -> ListItem<'stat
 }
 
 fn draw_playlists(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if app.active_playlist.is_some() {
+        draw_tracks(frame, app, area);
+        return;
+    }
     let items = app
         .playlists
         .iter()
@@ -419,7 +423,7 @@ fn draw_modal(frame: &mut Frame<'_>, app: &App, modal: &Modal, area: Rect) {
         Modal::Account(_) => unreachable!(),
         Modal::Help => (
             " Клавиши ",
-            "1-8 разделы    / поиск\ni импорт          f лайк\nEnter открыть или войти\n↑↓ или jk выбор   Space пауза\nn/p трек          ←→ или hl ±10 сек\n+/- громкость     s/r режимы\nx выйти из аккаунта\nF2 вход/регистрация, мышь CAPTCHA\nq выход           Esc закрыть",
+            "1-8 разделы    / поиск\ni импорт          f лайк\nEnter открыть или войти\nEsc назад          ↑↓ или jk выбор\nSpace пауза        n/p трек\n←→ или hl ±10 сек  +/- громкость\ns/r режимы         x выйти из аккаунта\nF2 вход/регистрация, мышь CAPTCHA\nq выход",
         ),
         Modal::CommandPalette => (
             " Команды ",

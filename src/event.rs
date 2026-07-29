@@ -144,6 +144,7 @@ fn map_key(
         KeyCode::Char('6') => Action::Navigate(Screen::Queue),
         KeyCode::Char('7') => Action::Navigate(Screen::Profile),
         KeyCode::Char('8') => Action::Navigate(Screen::Settings),
+        KeyCode::Esc => Action::Back,
         KeyCode::Enter => Action::Activate,
         _ => Action::Resize,
     }

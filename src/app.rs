@@ -135,6 +135,7 @@ pub struct App {
     pub wave_loading: bool,
     pub library: Vec<TrackRef>,
     pub playlists: Vec<Playlist>,
+    pub active_playlist: Option<uuid::Uuid>,
     pub queue: Vec<TrackRef>,
     pub queue_index: Option<usize>,
     pub now_playing: Option<TrackRef>,
@@ -178,6 +179,7 @@ impl App {
             wave_loading: false,
             library: storage.library_tracks()?,
             playlists: storage.list_playlists()?,
+            active_playlist: None,
             queue: queue.tracks,
             queue_index,
             now_playing,
@@ -219,11 +221,20 @@ impl App {
             Action::Quit => self.should_quit = true,
             Action::Navigate(screen) => {
                 self.screen = screen;
+                if screen != Screen::Playlists {
+                    self.active_playlist = None;
+                }
                 self.selected = 0;
                 if screen == Screen::Wave && self.wave_tracks.is_empty() && !self.wave_loading {
                     self.wave_loading = true;
                     self.status_message = "Собираем Мою волну".to_string();
                     self.effects.push(AppEffect::GenerateWave);
+                }
+            }
+            Action::Back => {
+                if self.screen == Screen::Playlists && self.active_playlist.take().is_some() {
+                    self.selected = 0;
+                    self.status_message = "Список плейлистов".to_string();
                 }
             }
             Action::SelectPrevious => {
@@ -466,13 +477,22 @@ impl App {
             Screen::Wave => &self.wave_tracks,
             Screen::Library | Screen::Home => &self.library,
             Screen::Queue => &self.queue,
+            Screen::Playlists => self
+                .active_playlist
+                .and_then(|id| self.playlists.iter().find(|playlist| playlist.id == id))
+                .map(|playlist| playlist.tracks.as_slice())
+                .unwrap_or(&[]),
             _ => &[],
         }
     }
 
     fn item_count(&self) -> usize {
         match self.screen {
-            Screen::Playlists => self.playlists.len(),
+            Screen::Playlists => self
+                .active_playlist
+                .and_then(|id| self.playlists.iter().find(|playlist| playlist.id == id))
+                .map(|playlist| playlist.tracks.len())
+                .unwrap_or(self.playlists.len()),
             Screen::Settings => CredentialKind::ALL.len(),
             Screen::Profile => 1,
             _ => self.selected_tracks().len(),
@@ -536,6 +556,18 @@ impl App {
     }
 
     fn activate_selected(&mut self) {
+        if self.screen == Screen::Playlists && self.active_playlist.is_none() {
+            if let Some(playlist) = self.playlists.get(self.selected) {
+                self.active_playlist = Some(playlist.id);
+                self.selected = 0;
+                self.status_message = format!(
+                    "Плейлист «{}»: {} треков, Esc назад",
+                    playlist.title,
+                    playlist.tracks.len()
+                );
+            }
+            return;
+        }
         if self.screen == Screen::Profile {
             match &self.account {
                 AccountState::Guest => {
@@ -807,6 +839,7 @@ impl App {
                     self.playlists.insert(0, playlist);
                 }
                 self.screen = Screen::Playlists;
+                self.active_playlist = None;
                 self.selected = 0;
                 self.modal = None;
                 self.status_message = format!("Импортирован «{title}»: {count} треков");
@@ -1399,6 +1432,17 @@ mod tests {
         assert_eq!(app.screen, Screen::Playlists);
         assert_eq!(app.playlists.len(), 1);
         assert!(app.status_message.contains("1 треков"));
+
+        app.handle(Action::Activate);
+        assert!(app.active_playlist.is_some());
+        assert_eq!(app.selected_tracks(), [test_track()]);
+        app.handle(Action::Activate);
+        assert!(matches!(
+            app.take_effects().as_slice(),
+            [AppEffect::Play(_)]
+        ));
+        app.handle(Action::Back);
+        assert!(app.active_playlist.is_none());
     }
 
     #[test]
