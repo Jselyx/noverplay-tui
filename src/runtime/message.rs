@@ -1,7 +1,7 @@
 use crate::{
     account::{
         error::AccountApiError,
-        models::{AccountAction, AccountSession, CaptchaChallenge},
+        models::{AccountAction, AccountSession, BootstrapUpdate, CaptchaChallenge},
     },
     model::{PlaybackSource, Playlist, TrackRef},
     onboarding::{
@@ -38,6 +38,10 @@ pub(super) enum RuntimeMessage {
     AccountRestored {
         generation: u64,
         result: Result<Option<AccountSession>, AccountApiError>,
+    },
+    BootstrapFinished {
+        generation: u64,
+        result: Result<BootstrapUpdate, AccountApiError>,
     },
     AccountLoggedOut {
         generation: u64,

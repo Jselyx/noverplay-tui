@@ -28,6 +28,7 @@ pub enum AppEffect {
         solution: CaptchaSolution,
     },
     RestoreAccount,
+    RefreshBootstrap,
     LogoutAccount,
     ProbeSoundCloud,
     PlanZapret(PathBuf),

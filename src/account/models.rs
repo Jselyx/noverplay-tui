@@ -86,6 +86,13 @@ pub struct SoundCloudBootstrap {
     pub client_id: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BootstrapUpdate {
+    pub protocol: String,
+    pub refresh_at: String,
+    pub refresh_at_ms: i64,
+}
+
 #[derive(Serialize)]
 pub(super) struct AuthBody<'a> {
     pub username: &'a str,

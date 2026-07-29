@@ -1,9 +1,11 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use anyhow::Result;
 
 use crate::{
     account::{
         error::AccountApiError,
-        models::{AccountAction, AccountSession, CaptchaChallenge},
+        models::{AccountAction, AccountSession, BootstrapUpdate, CaptchaChallenge},
         state::{AccountDialog, AccountDialogStage, AccountState},
     },
     action::Action,
@@ -112,6 +114,17 @@ pub enum Modal {
     CommandPalette,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum BootstrapState {
+    #[default]
+    Unknown,
+    Refreshing,
+    Ready {
+        refresh_at: Option<String>,
+    },
+    Failed(String),
+}
+
 #[derive(Debug)]
 pub struct App {
     pub screen: Screen,
@@ -128,6 +141,8 @@ pub struct App {
     pub player: PlayerState,
     pub credentials: CredentialState,
     pub account: AccountState,
+    pub bootstrap: BootstrapState,
+    pub soundcloud_refresh_at_ms: Option<i64>,
     pub soundcloud_enabled: bool,
     pub yandex_enabled: bool,
     pub modal: Option<Modal>,
@@ -173,6 +188,12 @@ impl App {
             },
             credentials: CredentialState::default(),
             account: AccountState::Guest,
+            bootstrap: config
+                .soundcloud_client_id_refresh_at_ms
+                .filter(|deadline| *deadline > now_ms())
+                .map(|_| BootstrapState::Ready { refresh_at: None })
+                .unwrap_or_default(),
+            soundcloud_refresh_at_ms: config.soundcloud_client_id_refresh_at_ms,
             soundcloud_enabled: config.soundcloud_enabled,
             yandex_enabled: config.yandex_enabled,
             modal: (!config.onboarding_completed).then(|| {
@@ -349,7 +370,11 @@ impl App {
             }
             Action::AccountAuthenticated(result) => self.finish_authentication(result),
             Action::AccountRestored(result) => self.finish_account_restore(result),
-            Action::AccountLoggedOut(result) => self.finish_logout(result),
+            Action::BootstrapFinished(result) => self.finish_bootstrap(result),
+            Action::AccountLoggedOut {
+                result,
+                soundcloud_configured,
+            } => self.finish_logout(result, soundcloud_configured),
             Action::SoundCloudChecked(access) => {
                 self.update_onboarding(|state| state.soundcloud_checked(access));
             }
@@ -828,6 +853,7 @@ impl App {
                 self.modal = None;
                 self.config_dirty = true;
                 self.status_message = format!("Вход выполнен: {name}");
+                self.schedule_bootstrap();
             }
             Err(error) => {
                 if let Some(Modal::Account(dialog)) = self.modal.as_mut() {
@@ -852,20 +878,52 @@ impl App {
                     expires_at: session.expires_at,
                 };
                 self.status_message = format!("Сессия восстановлена: {name}");
+                self.config_dirty = true;
+                self.schedule_bootstrap();
             }
             Ok(None) => {
                 self.account = AccountState::Guest;
+                self.bootstrap = BootstrapState::Unknown;
                 self.status_message = "Гостевой режим".to_string();
+                self.config_dirty = true;
             }
             Err(error) => {
                 self.account = AccountState::Guest;
+                self.bootstrap = BootstrapState::Unknown;
                 self.status_message = format!("Сессию не удалось проверить: {error}");
             }
         }
     }
 
-    fn finish_logout(&mut self, result: Result<(), AccountApiError>) {
+    fn finish_bootstrap(&mut self, result: Result<BootstrapUpdate, AccountApiError>) {
+        match result {
+            Ok(update) => {
+                self.soundcloud_refresh_at_ms = Some(update.refresh_at_ms);
+                self.bootstrap = BootstrapState::Ready {
+                    refresh_at: Some(update.refresh_at),
+                };
+                self.credentials.soundcloud = true;
+                self.soundcloud_enabled = true;
+                self.config_dirty = true;
+                self.status_message = "SoundCloud client_id получен из аккаунта".to_string();
+            }
+            Err(error) => {
+                let retry_seconds = error.retry_after_seconds.unwrap_or(300).max(60);
+                self.soundcloud_refresh_at_ms =
+                    Some(now_ms().saturating_add((retry_seconds as i64).saturating_mul(1_000)));
+                self.bootstrap = BootstrapState::Failed(error.to_string());
+                self.config_dirty = true;
+                self.status_message =
+                    format!("Аккаунт вошёл, но SoundCloud ключ не получен: {error}");
+            }
+        }
+    }
+
+    fn finish_logout(&mut self, result: Result<(), AccountApiError>, soundcloud_configured: bool) {
         self.account = AccountState::Guest;
+        self.bootstrap = BootstrapState::Unknown;
+        self.soundcloud_refresh_at_ms = None;
+        self.credentials.soundcloud = soundcloud_configured;
         self.modal = None;
         self.config_dirty = true;
         self.status_message = match result {
@@ -885,6 +943,21 @@ impl App {
             self.status_message = "Выходим из Noverplay".to_string();
             self.effects.push(AppEffect::LogoutAccount);
         }
+    }
+
+    fn schedule_bootstrap(&mut self) {
+        if self
+            .soundcloud_refresh_at_ms
+            .is_some_and(|deadline| deadline > now_ms())
+        {
+            if !matches!(self.bootstrap, BootstrapState::Ready { .. }) {
+                self.bootstrap = BootstrapState::Ready { refresh_at: None };
+            }
+            return;
+        }
+        self.bootstrap = BootstrapState::Refreshing;
+        self.status_message = "Получаем SoundCloud client_id из аккаунта".to_string();
+        self.effects.push(AppEffect::RefreshBootstrap);
     }
 
     fn click_modal(&mut self, column: u16, row: u16, terminal_width: u16, terminal_height: u16) {
@@ -949,6 +1022,13 @@ impl App {
         }
         self.modal = None;
     }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1097,6 +1177,46 @@ mod tests {
                 && captcha_id == "captcha"
                 && solution.points.len() == 4
         ));
+    }
+
+    #[test]
+    fn fresh_bootstrap_deadline_stops_the_client_from_hammering_the_server() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(
+            &storage,
+            &AppConfig {
+                onboarding_completed: true,
+                ..AppConfig::default()
+            },
+        )
+        .unwrap();
+        let session = AccountSession {
+            user: crate::account::models::AccountUser {
+                id: "1".to_string(),
+                username: "user123".to_string(),
+                display_name: "User".to_string(),
+                uid: "42".to_string(),
+                public_uid: "public".to_string(),
+                created_at: "now".to_string(),
+                avatar_url: String::new(),
+                telemetry_opt_in: false,
+            },
+            expires_at: "later".to_string(),
+        };
+
+        app.handle(Action::AccountAuthenticated(Ok(session.clone())));
+        assert_eq!(app.take_effects(), vec![AppEffect::RefreshBootstrap]);
+        app.handle(Action::BootstrapFinished(Ok(BootstrapUpdate {
+            protocol: "noverplay-app-auth-v2".to_string(),
+            refresh_at: "later".to_string(),
+            refresh_at_ms: now_ms() + 3_600_000,
+        })));
+        app.handle(Action::AccountAuthenticated(Ok(session)));
+
+        assert!(app.take_effects().is_empty());
+        assert!(matches!(app.bootstrap, BootstrapState::Ready { .. }));
     }
 
     #[test]

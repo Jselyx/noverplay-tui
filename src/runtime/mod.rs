@@ -27,7 +27,8 @@ use crate::{
 };
 
 use account::{
-    AuthenticationRequest, spawn_authentication, spawn_captcha, spawn_logout, spawn_restore,
+    AuthenticationRequest, spawn_authentication, spawn_bootstrap, spawn_captcha, spawn_logout,
+    spawn_restore,
 };
 use importer::spawn_import;
 use message::RuntimeMessage;
@@ -146,6 +147,7 @@ impl Runtime {
                     &mut actions,
                 ),
                 AppEffect::RestoreAccount => self.start_restore(&mut actions),
+                AppEffect::RefreshBootstrap => self.start_bootstrap(&mut actions),
                 AppEffect::LogoutAccount => self.start_logout(&mut actions),
                 AppEffect::SaveCredential { kind, value } => {
                     actions.push(Action::CredentialSaved {
@@ -280,10 +282,26 @@ impl Runtime {
                 {
                     actions.push(Action::AccountRestored(result));
                 }
+                RuntimeMessage::BootstrapFinished { generation, result }
+                    if generation == self.account_generation =>
+                {
+                    if result.is_ok() {
+                        self.reload_providers();
+                    }
+                    actions.push(Action::BootstrapFinished(result));
+                }
                 RuntimeMessage::AccountLoggedOut { generation, result }
                     if generation == self.account_generation =>
                 {
-                    actions.push(Action::AccountLoggedOut(result));
+                    self.reload_providers();
+                    let soundcloud_configured = self
+                        .credential_state()
+                        .map(|state| state.soundcloud)
+                        .unwrap_or(false);
+                    actions.push(Action::AccountLoggedOut {
+                        result,
+                        soundcloud_configured,
+                    });
                 }
                 RuntimeMessage::SoundCloudChecked { generation, access }
                     if generation == self.onboarding_generation =>
@@ -515,11 +533,24 @@ impl Runtime {
 
     fn start_logout(&mut self, actions: &mut Vec<Action>) {
         let Some(client) = self.account_client.clone() else {
-            let result = self
+            let session_result = self
                 .secrets
                 .remove(crate::secrets::SecretKey::SessionToken)
                 .map_err(|error| AccountApiError::local("SESSION_REMOVE", error.to_string()));
-            actions.push(Action::AccountLoggedOut(result));
+            let cache_result = self
+                .secrets
+                .remove(crate::secrets::SecretKey::SoundCloudClientId)
+                .map_err(|error| AccountApiError::local("BOOTSTRAP_REMOVE", error.to_string()));
+            let result = session_result.and(cache_result);
+            self.reload_providers();
+            let soundcloud_configured = self
+                .credential_state()
+                .map(|state| state.soundcloud)
+                .unwrap_or(false);
+            actions.push(Action::AccountLoggedOut {
+                result,
+                soundcloud_configured,
+            });
             return;
         };
         self.cancel_account_task();
@@ -529,6 +560,26 @@ impl Runtime {
             self.sender.clone(),
             self.account_generation,
         ));
+    }
+
+    fn start_bootstrap(&mut self, actions: &mut Vec<Action>) {
+        let Some(client) = self.account_client.clone() else {
+            actions.push(Action::BootstrapFinished(Err(account_unavailable())));
+            return;
+        };
+        self.cancel_account_task();
+        self.account_task = Some(spawn_bootstrap(
+            client,
+            self.secrets.clone(),
+            self.sender.clone(),
+            self.account_generation,
+        ));
+    }
+
+    fn reload_providers(&mut self) {
+        let setup = build_registry(&self.config, &self.secrets);
+        self.providers = Arc::new(setup.registry);
+        self.notices.extend(setup.notices);
     }
 
     fn cancel_account_task(&mut self) {

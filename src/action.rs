@@ -1,7 +1,7 @@
 use crate::{
     account::{
         error::AccountApiError,
-        models::{AccountAction, AccountSession, CaptchaChallenge},
+        models::{AccountAction, AccountSession, BootstrapUpdate, CaptchaChallenge},
     },
     app::Screen,
     audio::AudioEvent,
@@ -75,7 +75,11 @@ pub enum Action {
     },
     AccountAuthenticated(Result<AccountSession, AccountApiError>),
     AccountRestored(Result<Option<AccountSession>, AccountApiError>),
-    AccountLoggedOut(Result<(), AccountApiError>),
+    BootstrapFinished(Result<BootstrapUpdate, AccountApiError>),
+    AccountLoggedOut {
+        result: Result<(), AccountApiError>,
+        soundcloud_configured: bool,
+    },
     SoundCloudChecked(SoundCloudAccess),
     ZapretPlanned(Result<Box<ZapretPlan>, String>),
     ZapretApplied(Result<ZapretApplyResult, String>),

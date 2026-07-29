@@ -100,6 +100,7 @@ async fn run_tui() -> Result<()> {
             config.soundcloud_enabled = app.soundcloud_enabled;
             config.yandex_enabled = app.yandex_enabled;
             config.guest_mode = app.account.user().is_none();
+            config.soundcloud_client_id_refresh_at_ms = app.soundcloud_refresh_at_ms;
             config.save(&paths)?;
             app.config_dirty = false;
         }

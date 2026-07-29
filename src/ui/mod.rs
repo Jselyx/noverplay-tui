@@ -246,25 +246,41 @@ fn draw_profile(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 Style::new().fg(Color::White),
             ),
         ],
-        crate::account::state::AccountState::Authenticated { user, expires_at } => vec![
-            Line::from(""),
-            Line::styled("             ●", Style::new().fg(PRIMARY)),
-            Line::styled(
-                format!("         {}", user.display_name),
-                Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-            Line::styled(
-                format!("         @{}", user.username),
-                Style::new().fg(MUTED),
-            ),
-            Line::styled(
-                format!("         ID {}", user.public_uid),
-                Style::new().fg(MUTED),
-            ),
-            Line::from(""),
-            Line::styled(format!("  Сессия до {expires_at}"), Style::new().fg(MUTED)),
-            Line::styled("  x  выйти из аккаунта", Style::new().fg(Color::White)),
-        ],
+        crate::account::state::AccountState::Authenticated { user, expires_at } => {
+            let bootstrap = match &app.bootstrap {
+                crate::app::BootstrapState::Unknown => "SoundCloud: ожидает bootstrap".to_string(),
+                crate::app::BootstrapState::Refreshing => {
+                    "SoundCloud: получаем client_id".to_string()
+                }
+                crate::app::BootstrapState::Ready { refresh_at } => refresh_at
+                    .as_ref()
+                    .map(|value| format!("SoundCloud: ключ готов до {value}"))
+                    .unwrap_or_else(|| "SoundCloud: серверный ключ готов".to_string()),
+                crate::app::BootstrapState::Failed(error) => {
+                    format!("SoundCloud: bootstrap не удался, {error}")
+                }
+            };
+            vec![
+                Line::from(""),
+                Line::styled("             ●", Style::new().fg(PRIMARY)),
+                Line::styled(
+                    format!("         {}", user.display_name),
+                    Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+                ),
+                Line::styled(
+                    format!("         @{}", user.username),
+                    Style::new().fg(MUTED),
+                ),
+                Line::styled(
+                    format!("         ID {}", user.public_uid),
+                    Style::new().fg(MUTED),
+                ),
+                Line::from(""),
+                Line::styled(format!("  {bootstrap}"), Style::new().fg(MUTED)),
+                Line::styled(format!("  Сессия до {expires_at}"), Style::new().fg(MUTED)),
+                Line::styled("  x  выйти из аккаунта", Style::new().fg(Color::White)),
+            ]
+        }
     };
     frame.render_widget(Paragraph::new(lines), area);
 }
