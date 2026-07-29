@@ -8,6 +8,7 @@ pub(super) struct SoundCloudClient {
     http: Client,
     client_id: String,
     api_v2: Url,
+    public_api: Url,
 }
 
 impl SoundCloudClient {
@@ -15,6 +16,7 @@ impl SoundCloudClient {
         Self::from_parts(
             client_id,
             Url::parse("https://api-v2.soundcloud.com/")?,
+            Url::parse("https://api.soundcloud.com/")?,
             build_http(Client::builder())?,
         )
     }
@@ -23,10 +25,10 @@ impl SoundCloudClient {
     pub(super) fn with_base(client_id: String, api_v2: Url) -> Result<Self> {
         // Пул увидел полуживой мок-сокет и решил устроить лотерею, в тестах этот балаган закрыт
         let http = build_http(Client::builder().pool_max_idle_per_host(0))?;
-        Self::from_parts(client_id, api_v2, http)
+        Self::from_parts(client_id, api_v2.clone(), api_v2, http)
     }
 
-    fn from_parts(client_id: String, api_v2: Url, http: Client) -> Result<Self> {
+    fn from_parts(client_id: String, api_v2: Url, public_api: Url, http: Client) -> Result<Self> {
         if client_id.trim().is_empty() {
             bail!("нужен client_id SoundCloud")
         }
@@ -34,11 +36,16 @@ impl SoundCloudClient {
             http,
             client_id,
             api_v2,
+            public_api,
         })
     }
 
     pub(super) fn v2_url(&self, path: &[&str]) -> Result<Url> {
         append_path(self.api_v2.clone(), path)
+    }
+
+    pub(super) fn public_url(&self, path: &[&str]) -> Result<Url> {
+        append_path(self.public_api.clone(), path)
     }
 
     pub(super) async fn get_json<T>(&self, url: Url, query: &[(&str, String)]) -> Result<T>

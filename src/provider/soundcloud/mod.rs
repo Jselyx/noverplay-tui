@@ -1,13 +1,14 @@
 mod client;
 mod mapping;
 mod models;
+mod playback;
 mod playlist;
 mod related;
 mod search;
 mod source_url;
 mod track_details;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use async_trait::async_trait;
 use url::Url;
 
@@ -17,6 +18,7 @@ use crate::{
 };
 
 use client::SoundCloudClient;
+use playback::poluchit_istochnik;
 use playlist::import_playlist;
 use related::related_tracks;
 use search::search_tracks;
@@ -62,8 +64,8 @@ impl MusicProvider for SoundCloudProvider {
         related_tracks(&self.client, track, limit).await
     }
 
-    async fn playback_source(&self, _track: &TrackRef) -> Result<PlaybackSource> {
-        bail!("воспроизведение SoundCloud еще не подключено")
+    async fn playback_source(&self, track: &TrackRef) -> Result<PlaybackSource> {
+        poluchit_istochnik(&self.client, track).await
     }
 }
 
