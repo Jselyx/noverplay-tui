@@ -12,6 +12,7 @@ if ($Version -notmatch '^[0-9][0-9A-Za-z.+~-]*$') {
 }
 $binaryPath = (Resolve-Path -LiteralPath $Binary).Path
 $licensePath = (Resolve-Path -LiteralPath "LICENSE").Path
+$installerPath = (Resolve-Path -LiteralPath "packaging/windows/install.ps1").Path
 $outputPath = [IO.Path]::GetFullPath($OutputDir)
 $stagePath = Join-Path $outputPath "noverplay-windows-x86_64"
 $archivePath = Join-Path $outputPath "noverplay-windows-x86_64.zip"
@@ -27,6 +28,7 @@ if (Test-Path -LiteralPath $archivePath) {
 New-Item -ItemType Directory -Path $stagePath -Force | Out-Null
 Copy-Item -LiteralPath $binaryPath -Destination (Join-Path $stagePath "noverplay.exe")
 Copy-Item -LiteralPath $licensePath -Destination (Join-Path $stagePath "LICENSE")
+Copy-Item -LiteralPath $installerPath -Destination (Join-Path $stagePath "install.ps1")
 Compress-Archive -Path (Join-Path $stagePath "*") -DestinationPath $archivePath
 
 $sha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
