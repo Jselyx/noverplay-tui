@@ -152,6 +152,7 @@ pub struct App {
     pub config_dirty: bool,
     pub status_message: String,
     onboarding_result: Option<OnboardingResult>,
+    onboarding_resume: Option<Box<OnboardingState>>,
     effects: Vec<AppEffect>,
 }
 
@@ -208,6 +209,7 @@ impl App {
             config_dirty: false,
             status_message: "Готово".to_string(),
             onboarding_result: None,
+            onboarding_resume: None,
             effects: Vec::new(),
         })
     }
@@ -426,7 +428,7 @@ impl App {
     }
 
     pub fn onboarding_open(&self) -> bool {
-        matches!(self.modal, Some(Modal::Onboarding(_)))
+        matches!(self.modal, Some(Modal::Onboarding(_))) || self.onboarding_resume.is_some()
     }
 
     pub fn text_modal_open(&self) -> bool {
@@ -850,7 +852,7 @@ impl App {
                     user: session.user,
                     expires_at: session.expires_at,
                 };
-                self.modal = None;
+                self.modal = self.onboarding_resume.take().map(Modal::Onboarding);
                 self.config_dirty = true;
                 self.status_message = format!("Вход выполнен: {name}");
                 self.schedule_bootstrap();
@@ -990,8 +992,13 @@ impl App {
                 self.effects.push(AppEffect::ProbeSoundCloud);
             }
             OnboardingCommand::StartAccountLogin => {
-                self.status_message =
-                    "Вход в аккаунт продолжится после подключения серверного API".to_string();
+                if let Some(Modal::Onboarding(state)) = self.modal.take() {
+                    self.onboarding_resume = Some(state);
+                    self.modal = Some(Modal::Account(Box::new(AccountDialog::new(
+                        AccountAction::Login,
+                    ))));
+                    self.status_message = "Введи логин и пароль Noverplay".to_string();
+                }
             }
             OnboardingCommand::PlanZapret(path) => {
                 self.status_message = "Проверяем установку Zapret".to_string();
@@ -1012,6 +1019,14 @@ impl App {
     }
 
     fn close_modal(&mut self) {
+        if matches!(self.modal, Some(Modal::Account(_)))
+            && let Some(mut state) = self.onboarding_resume.take()
+        {
+            state.account_mode = AccountMode::Guest;
+            self.modal = Some(Modal::Onboarding(state));
+            self.status_message = "Продолжаем быструю настройку в гостевом режиме".to_string();
+            return;
+        }
         if let Some(Modal::Onboarding(state)) = &self.modal {
             let mut result = state.result();
             if state.step == crate::onboarding::OnboardingStep::Welcome {
@@ -1217,6 +1232,61 @@ mod tests {
 
         assert!(app.take_effects().is_empty());
         assert!(matches!(app.bootstrap, BootstrapState::Ready { .. }));
+    }
+
+    #[test]
+    fn first_run_login_returns_to_provider_setup_instead_of_finishing_the_wizard() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+
+        app.handle(Action::ModalSubmit);
+        app.handle(Action::ModalSubmit);
+
+        assert!(matches!(app.modal, Some(Modal::Account(_))));
+        assert!(app.onboarding_open());
+
+        app.handle(Action::AccountAuthenticated(Ok(AccountSession {
+            user: crate::account::models::AccountUser {
+                id: "1".to_string(),
+                username: "user123".to_string(),
+                display_name: "User".to_string(),
+                uid: "42".to_string(),
+                public_uid: "public".to_string(),
+                created_at: "now".to_string(),
+                avatar_url: String::new(),
+                telemetry_opt_in: false,
+            },
+            expires_at: "later".to_string(),
+        })));
+
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Onboarding(ref state))
+                if state.step == crate::onboarding::OnboardingStep::Providers
+                    && state.account_mode == AccountMode::Account
+        ));
+        assert!(app.onboarding_open());
+    }
+
+    #[test]
+    fn cancelling_first_run_login_continues_as_guest() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        app.handle(Action::ModalSubmit);
+        app.handle(Action::ModalSubmit);
+
+        app.handle(Action::CloseModal);
+
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Onboarding(ref state))
+                if state.step == crate::onboarding::OnboardingStep::Providers
+                    && state.account_mode == AccountMode::Guest
+        ));
     }
 
     #[test]
