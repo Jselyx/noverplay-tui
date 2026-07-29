@@ -5,6 +5,7 @@ pub mod config;
 pub mod effect;
 pub mod event;
 pub mod model;
+pub mod onboarding;
 pub mod provider;
 pub mod runtime;
 pub mod secrets;
