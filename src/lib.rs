@@ -4,6 +4,7 @@ pub mod audio;
 pub mod config;
 pub mod event;
 pub mod model;
+pub mod provider;
 pub mod secrets;
 pub mod storage;
 pub mod terminal;
