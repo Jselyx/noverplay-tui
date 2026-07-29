@@ -99,6 +99,7 @@ impl AppConfig {
     }
 
     pub fn normalized(mut self) -> Self {
+        // юзер может вписать 9000 fps, но железо не обязано участвовать в этом перформансе 🤡
         self.volume_percent = self.volume_percent.min(100);
         self.cover_cache_mb = self.cover_cache_mb.clamp(16, 1024);
         self.search_debounce_ms = self.search_debounce_ms.clamp(100, 2_000);

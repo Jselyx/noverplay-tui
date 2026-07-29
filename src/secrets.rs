@@ -63,6 +63,7 @@ impl SecretStore {
     }
 
     pub fn set(&self, key: SecretKey, value: &str) -> Result<SecretBackend> {
+        // keyring опять решил быть элитой, поэтому держим запасной выход для реального мира 🫩✌️
         if self.system_enabled
             && Entry::new(SERVICE_NAME, key.name())
                 .and_then(|entry| entry.set_password(value))
@@ -124,6 +125,7 @@ impl SecretStore {
     }
 
     fn save_file(&self, value: &SecretFile) -> Result<()> {
+        // хахах найс секреты без родительской папки, щас бы файловую систему силой мысли создать )))))
         if let Some(parent) = self.fallback_file.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Не удалось создать каталог секретов {}", parent.display())

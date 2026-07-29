@@ -108,6 +108,7 @@ impl Storage {
     }
 
     pub fn save_playlist(&self, playlist: &Playlist) -> Result<()> {
+        // один плейлист одна транзакция, потому что половина плейлиста это уже современное искусство 🤡
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         transaction.execute(
@@ -349,6 +350,7 @@ impl Storage {
     fn connection(&self) -> Result<Connection> {
         let connection = Connection::open(&self.path)
             .with_context(|| format!("Не удалось открыть БД {}", self.path.display()))?;
+        // WAL, потому что морозить плеер одной записью умеют и без нас АХАХАХА 🫩
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
