@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
     model::{PlaybackCapability, ProviderKind, TrackRef},
     storage::HistoryEntry,
@@ -6,7 +8,7 @@ use url::Url;
 
 use super::{
     WaveCandidate, WaveCandidateOrigin, WaveGenreProfile, WaveMode, WaveMood, WaveQueueQuotas,
-    WaveSettings, WaveSourceMode, WaveTasteProfile,
+    WaveRankInput, WaveSettings, WaveSourceMode, WaveTasteProfile, rank_candidates,
 };
 
 #[test]
@@ -155,6 +157,65 @@ fn genre_similarity_uses_the_same_weighted_pc_tags() {
     ]);
     assert!(profile.similarity(&rock) > profile.similarity(&jazz));
     assert_eq!(profile.similarity(&track("plain", "Artist")), 0.0);
+}
+
+#[test]
+fn ranking_filters_cooldown_and_exact_likes_like_pc() {
+    let now = 2_000_000_000_000_i64;
+    let recent = track("recent", "Known");
+    let liked = track("liked", "Liked");
+    let fresh = track("fresh", "Fresh");
+    let history = vec![history(recent.clone(), now - 1_000)];
+    let likes = vec![(liked.clone(), now - 1_000)];
+    let profile = WaveTasteProfile::build(&history, &likes, now);
+    let genre = WaveGenreProfile::from_tracks(&profile.recent_tracks);
+    let settings = WaveSettings {
+        primary_provider: ProviderKind::SoundCloud,
+        ..WaveSettings::default()
+    };
+    let ranked = rank_candidates(WaveRankInput {
+        candidates: vec![recent, liked, fresh.clone()]
+            .into_iter()
+            .map(|track| WaveCandidate::new(track, WaveCandidateOrigin::Seed))
+            .collect(),
+        profile: &profile,
+        genre_profile: &genre,
+        settings: &settings,
+        now_ms: now,
+        exclude_track_keys: &HashSet::new(),
+        exclude_artist_ids: &HashSet::new(),
+        strict_seed_artist_ids: &HashSet::new(),
+    });
+    assert_eq!(ranked.len(), 1);
+    assert_eq!(ranked[0].track, fresh);
+}
+
+#[test]
+fn balanced_score_prefers_recent_artist_with_pc_weights() {
+    let now = 2_000_000_000_000_i64;
+    let history = vec![history(track("old", "Known"), now - 25 * 3_600_000)];
+    let profile = WaveTasteProfile::build(&history, &[], now);
+    let genre = WaveGenreProfile::default();
+    let settings = WaveSettings {
+        primary_provider: ProviderKind::SoundCloud,
+        ..WaveSettings::default()
+    };
+    let known = track("known-next", "Known");
+    let unknown = track("unknown", "Unknown");
+    let ranked = rank_candidates(WaveRankInput {
+        candidates: vec![known.clone(), unknown]
+            .into_iter()
+            .map(|track| WaveCandidate::new(track, WaveCandidateOrigin::Seed))
+            .collect(),
+        profile: &profile,
+        genre_profile: &genre,
+        settings: &settings,
+        now_ms: now,
+        exclude_track_keys: &HashSet::new(),
+        exclude_artist_ids: &HashSet::new(),
+        strict_seed_artist_ids: &HashSet::new(),
+    });
+    assert_eq!(ranked[0].track, known);
 }
 
 fn history(track: TrackRef, played_at_ms: i64) -> HistoryEntry {
