@@ -9,6 +9,7 @@ pub enum WaveCandidateOrigin {
     Explore,
     Comfort,
     YandexPersonal,
+    Backfill,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -52,6 +53,8 @@ impl WaveCandidate {
             )
         }) {
             WaveBucket::Related
+        } else if self.origins.contains(&WaveCandidateOrigin::Backfill) {
+            WaveBucket::Backfill
         } else {
             WaveBucket::Core
         }

@@ -19,6 +19,7 @@ pub struct WaveTasteProfile {
     pub all_artist_map: HashMap<String, i64>,
     pub liked_track_keys: HashSet<String>,
     pub liked_artist_ids: HashSet<String>,
+    pub artist_names: HashMap<String, String>,
     play_events: Vec<(String, i64)>,
 }
 
@@ -37,6 +38,16 @@ impl WaveTasteProfile {
         let all_artist_map = all_top_artists.iter().cloned().collect();
         let liked_track_keys = liked.iter().map(|(track, _)| track_key(track)).collect();
         let liked_artist_ids = liked.iter().map(|(track, _)| artist_id(track)).collect();
+        let mut artist_names = HashMap::new();
+        for track in history
+            .iter()
+            .map(|entry| &entry.track)
+            .chain(liked.iter().map(|(track, _)| track))
+        {
+            artist_names
+                .entry(artist_id(track))
+                .or_insert_with(|| track.display_artist());
+        }
         let play_events = history
             .iter()
             .map(|entry| (track_key(&entry.track), entry.played_at_ms))
@@ -53,6 +64,7 @@ impl WaveTasteProfile {
             all_artist_map,
             liked_track_keys,
             liked_artist_ids,
+            artist_names,
             play_events,
         }
     }
