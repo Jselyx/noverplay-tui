@@ -36,6 +36,7 @@ symphonia = { version = "0.6", default-features = false, features = ["aac", "fla
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 yandex-music = "0.4.8"
+zeroize = "1"
 
 [dev-dependencies]
 tempfile = "3"
