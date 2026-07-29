@@ -3,6 +3,7 @@ use anyhow::Result;
 use crate::{
     action::Action,
     config::AppConfig,
+    effect::AppEffect,
     model::{Playlist, RepeatMode, TrackRef},
     storage::{QueueSnapshot, Storage},
 };
@@ -116,6 +117,7 @@ pub struct App {
     pub queue_dirty: bool,
     pub config_dirty: bool,
     pub status_message: String,
+    effects: Vec<AppEffect>,
 }
 
 impl App {
@@ -145,6 +147,7 @@ impl App {
             queue_dirty: false,
             config_dirty: false,
             status_message: "Готово".to_string(),
+            effects: Vec::new(),
         })
     }
 
@@ -167,12 +170,14 @@ impl App {
             Action::Activate => self.activate_selected(),
             Action::TogglePause => {
                 if self.now_playing.is_some() {
-                    self.player.status = match self.player.status {
+                    let (status, effect) = match self.player.status {
                         PlaybackStatus::Playing | PlaybackStatus::Buffering => {
-                            PlaybackStatus::Paused
+                            (PlaybackStatus::Paused, AppEffect::Pause)
                         }
-                        _ => PlaybackStatus::Playing,
+                        _ => (PlaybackStatus::Playing, AppEffect::Resume),
                     };
+                    self.player.status = status;
+                    self.effects.push(effect);
                 }
             }
             Action::NextTrack => self.next_track(),
@@ -180,12 +185,17 @@ impl App {
             Action::ChangeVolume(delta) => {
                 self.player.volume_percent =
                     (i16::from(self.player.volume_percent) + i16::from(delta)).clamp(0, 100) as u8;
+                self.effects
+                    .push(AppEffect::SetVolume(self.player.volume_percent));
                 self.config_dirty = true;
             }
             Action::Seek(delta) => {
                 self.player.position_ms = (self.player.position_ms as i64 + delta)
                     .clamp(0, self.player.duration_ms as i64)
                     as u64;
+                if self.now_playing.is_some() {
+                    self.effects.push(AppEffect::Seek(self.player.position_ms));
+                }
             }
             Action::ToggleShuffle => {
                 self.player.shuffle = !self.player.shuffle;
@@ -211,7 +221,9 @@ impl App {
                 self.status_message = if self.search_query.trim().is_empty() {
                     "Введите запрос".to_string()
                 } else {
-                    format!("Ищем: {}", self.search_query.trim())
+                    let query = self.search_query.trim().to_string();
+                    self.effects.push(AppEffect::Search(query.clone()));
+                    format!("Ищем: {query}")
                 };
             }
             Action::OpenHelp => self.modal = Some(Modal::Help),
@@ -243,6 +255,10 @@ impl App {
             shuffle: self.player.shuffle,
             repeat: self.player.repeat,
         }
+    }
+
+    pub fn take_effects(&mut self) -> Vec<AppEffect> {
+        std::mem::take(&mut self.effects)
     }
 
     pub fn selected_tracks(&self) -> &[TrackRef] {
@@ -280,6 +296,7 @@ impl App {
         self.player.duration_ms = track.duration_ms.unwrap_or_default();
         self.player.status = PlaybackStatus::Buffering;
         self.queue_dirty = true;
+        self.effects.push(AppEffect::Play(Box::new(track)));
     }
 
     fn next_track(&mut self) {
@@ -296,6 +313,7 @@ impl App {
             0
         } else {
             self.player.status = PlaybackStatus::Stopped;
+            self.effects.push(AppEffect::Stop);
             return;
         };
         self.set_queue_track(next);
@@ -308,6 +326,7 @@ impl App {
         // пять секунд это ещё не прошлый трек, это палец случайно решил пожить 🫩
         if self.player.position_ms > 5_000 {
             self.player.position_ms = 0;
+            self.effects.push(AppEffect::Seek(0));
             return;
         }
         let current = self.queue_index.unwrap_or(0);
@@ -332,13 +351,21 @@ impl App {
             .unwrap_or_default();
         self.player.status = PlaybackStatus::Buffering;
         self.queue_dirty = true;
+        if let Some(track) = self.now_playing.clone() {
+            self.effects.push(AppEffect::Play(Box::new(track)));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AppConfig;
+    use crate::{
+        config::AppConfig,
+        effect::AppEffect,
+        model::{PlaybackCapability, ProviderKind},
+    };
+    use url::Url;
 
     #[test]
     fn navigation_wrap_is_clamped_to_empty_content() {
@@ -348,5 +375,47 @@ mod tests {
         let mut app = App::load(&storage, &AppConfig::default()).unwrap();
         app.handle(Action::SelectNext);
         assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn activating_track_emits_play_effect() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        let track = test_track();
+        app.library.push(track.clone());
+        app.screen = Screen::Library;
+        app.handle(Action::Activate);
+        assert_eq!(app.take_effects(), vec![AppEffect::Play(Box::new(track))]);
+    }
+
+    #[test]
+    fn search_submission_emits_trimmed_query() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        app.search_query = "  winter mix  ".to_string();
+        app.handle(Action::SubmitSearch);
+        assert_eq!(
+            app.take_effects(),
+            vec![AppEffect::Search("winter mix".to_string())]
+        );
+    }
+
+    fn test_track() -> TrackRef {
+        TrackRef {
+            provider: ProviderKind::SoundCloud,
+            id: "42".to_string(),
+            title: "Трек".to_string(),
+            artists: vec!["Автор".to_string()],
+            duration_ms: Some(60_000),
+            artwork_url: None,
+            web_url: Url::parse("https://soundcloud.com/test/track").unwrap(),
+            capability: PlaybackCapability::Full,
+            genres: Vec::new(),
+            explicit: false,
+        }
     }
 }

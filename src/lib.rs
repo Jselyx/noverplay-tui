@@ -2,6 +2,7 @@ pub mod action;
 pub mod app;
 pub mod audio;
 pub mod config;
+pub mod effect;
 pub mod event;
 pub mod model;
 pub mod provider;
