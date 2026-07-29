@@ -218,6 +218,13 @@ impl AccountDialog {
             .unwrap_or_default()
     }
 
+    pub fn authentication_failed(&mut self, message: String) {
+        self.stage = AccountDialogStage::Captcha;
+        self.clicks.clear();
+        self.captcha_answer.clear();
+        self.error = Some(message);
+    }
+
     fn is_text_captcha(&self) -> bool {
         self.challenge
             .as_ref()

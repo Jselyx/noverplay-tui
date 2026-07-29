@@ -1,4 +1,8 @@
 use crate::{
+    account::{
+        error::AccountApiError,
+        models::{AccountAction, AccountSession, CaptchaChallenge},
+    },
     app::Screen,
     audio::AudioEvent,
     model::TrackRef,
@@ -44,6 +48,15 @@ pub enum Action {
     OpenHelp,
     OpenCommandPalette,
     OpenPlaylistImport,
+    OpenAccount(AccountAction),
+    ToggleAccountMode,
+    AccountLogout,
+    MouseClick {
+        column: u16,
+        row: u16,
+        terminal_width: u16,
+        terminal_height: u16,
+    },
     CloseModal,
     ModalSubmit,
     ModalPrevious,
@@ -56,6 +69,13 @@ pub enum Action {
         result: Result<(), String>,
     },
     PlaylistImported(Result<crate::model::Playlist, String>),
+    AccountCaptchaLoaded {
+        action: AccountAction,
+        result: Result<CaptchaChallenge, AccountApiError>,
+    },
+    AccountAuthenticated(Result<AccountSession, AccountApiError>),
+    AccountRestored(Result<Option<AccountSession>, AccountApiError>),
+    AccountLoggedOut(Result<(), AccountApiError>),
     SoundCloudChecked(SoundCloudAccess),
     ZapretPlanned(Result<Box<ZapretPlan>, String>),
     ZapretApplied(Result<ZapretApplyResult, String>),

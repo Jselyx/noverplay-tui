@@ -1,6 +1,11 @@
 use anyhow::Result;
 
 use crate::{
+    account::{
+        error::AccountApiError,
+        models::{AccountAction, AccountSession, CaptchaChallenge},
+        state::{AccountDialog, AccountDialogStage, AccountState},
+    },
     action::Action,
     config::AppConfig,
     credentials::{CredentialEditor, CredentialKind, CredentialState},
@@ -102,6 +107,7 @@ pub enum Modal {
     Onboarding(Box<OnboardingState>),
     Credential(Box<CredentialEditor>),
     PlaylistImport(Box<PlaylistImportEditor>),
+    Account(Box<AccountDialog>),
     Help,
     CommandPalette,
 }
@@ -121,6 +127,7 @@ pub struct App {
     pub now_playing: Option<TrackRef>,
     pub player: PlayerState,
     pub credentials: CredentialState,
+    pub account: AccountState,
     pub soundcloud_enabled: bool,
     pub yandex_enabled: bool,
     pub modal: Option<Modal>,
@@ -165,6 +172,7 @@ impl App {
                 ..PlayerState::default()
             },
             credentials: CredentialState::default(),
+            account: AccountState::Guest,
             soundcloud_enabled: config.soundcloud_enabled,
             yandex_enabled: config.yandex_enabled,
             modal: (!config.onboarding_completed).then(|| {
@@ -315,6 +323,18 @@ impl App {
                 self.modal = Some(Modal::PlaylistImport(Box::default()));
                 self.status_message = "Вставь ссылку на плейлист SoundCloud или Yandex".to_string();
             }
+            Action::OpenAccount(action) => {
+                self.modal = Some(Modal::Account(Box::new(AccountDialog::new(action))));
+                self.status_message = "Введи логин и пароль Noverplay".to_string();
+            }
+            Action::ToggleAccountMode => self.toggle_account_mode(),
+            Action::AccountLogout => self.logout_account(),
+            Action::MouseClick {
+                column,
+                row,
+                terminal_width,
+                terminal_height,
+            } => self.click_modal(column, row, terminal_width, terminal_height),
             Action::CloseModal => self.close_modal(),
             Action::ModalSubmit => self.submit_modal(),
             Action::ModalPrevious => self.move_modal_selection(false),
@@ -324,6 +344,12 @@ impl App {
             Action::ModalBackspace => self.backspace_modal(),
             Action::CredentialSaved { kind, result } => self.finish_credential_save(kind, result),
             Action::PlaylistImported(result) => self.finish_playlist_import(result),
+            Action::AccountCaptchaLoaded { action, result } => {
+                self.finish_account_captcha(action, result)
+            }
+            Action::AccountAuthenticated(result) => self.finish_authentication(result),
+            Action::AccountRestored(result) => self.finish_account_restore(result),
+            Action::AccountLoggedOut(result) => self.finish_logout(result),
             Action::SoundCloudChecked(access) => {
                 self.update_onboarding(|state| state.soundcloud_checked(access));
             }
@@ -381,8 +407,15 @@ impl App {
     pub fn text_modal_open(&self) -> bool {
         matches!(
             self.modal,
-            Some(Modal::Credential(_) | Modal::PlaylistImport(_))
+            Some(Modal::Credential(_) | Modal::PlaylistImport(_) | Modal::Account(_))
         )
+    }
+
+    pub fn restore_account(&mut self) {
+        self.account = AccountState::Restoring;
+        self.effects.push(AppEffect::RestoreAccount);
+        self.status_message = "Проверяем сессию Noverplay".to_string();
+        self.dirty = true;
     }
 
     pub fn take_onboarding_result(&mut self) -> Option<OnboardingResult> {
@@ -408,6 +441,7 @@ impl App {
         match self.screen {
             Screen::Playlists => self.playlists.len(),
             Screen::Settings => CredentialKind::ALL.len(),
+            Screen::Profile => 1,
             _ => self.selected_tracks().len(),
         }
     }
@@ -469,6 +503,23 @@ impl App {
     }
 
     fn activate_selected(&mut self) {
+        if self.screen == Screen::Profile {
+            match &self.account {
+                AccountState::Guest => {
+                    self.modal = Some(Modal::Account(Box::new(AccountDialog::new(
+                        AccountAction::Login,
+                    ))));
+                    self.status_message = "Введи логин и пароль Noverplay".to_string();
+                }
+                AccountState::Restoring => {
+                    self.status_message = "Сессия ещё проверяется".to_string();
+                }
+                AccountState::Authenticated { .. } => {
+                    self.status_message = "Для выхода нажми x".to_string();
+                }
+            }
+            return;
+        }
         if self.screen == Screen::Settings {
             if let Some(kind) = CredentialKind::ALL.get(self.selected).copied() {
                 self.modal = Some(Modal::Credential(Box::new(CredentialEditor::new(kind))));
@@ -595,11 +646,57 @@ impl App {
                 self.status_message = "Импортируем плейлист".to_string();
                 self.effects.push(AppEffect::ImportPlaylist(url));
             }
+            Some(Modal::Account(dialog)) => match dialog.stage {
+                AccountDialogStage::Credentials => {
+                    if let Err(error) = dialog.validate_credentials() {
+                        dialog.error = Some(error.to_string());
+                        self.status_message = error.to_string();
+                        return;
+                    }
+                    dialog.stage = AccountDialogStage::LoadingCaptcha;
+                    dialog.error = None;
+                    self.status_message = "Загружаем CAPTCHA".to_string();
+                    self.effects
+                        .push(AppEffect::LoadAccountCaptcha(dialog.action));
+                }
+                AccountDialogStage::Captcha => {
+                    let solution = match dialog.solution() {
+                        Ok(solution) => solution,
+                        Err(error) => {
+                            dialog.error = Some(error.to_string());
+                            self.status_message = error.to_string();
+                            return;
+                        }
+                    };
+                    dialog.stage = AccountDialogStage::Submitting;
+                    dialog.error = None;
+                    self.status_message = match dialog.action {
+                        AccountAction::Login => "Входим в Noverplay".to_string(),
+                        AccountAction::Register => "Создаём аккаунт Noverplay".to_string(),
+                    };
+                    self.effects.push(AppEffect::AuthenticateAccount {
+                        action: dialog.action,
+                        username: dialog.username.clone(),
+                        password: dialog.password.clone(),
+                        captcha_id: dialog.captcha_id().to_string(),
+                        solution,
+                    });
+                }
+                AccountDialogStage::LoadingCaptcha | AccountDialogStage::Submitting => {}
+            },
             _ => self.close_modal(),
         }
     }
 
     fn move_modal_selection(&mut self, next: bool) {
+        if let Some(Modal::Account(dialog)) = self.modal.as_mut() {
+            if next {
+                dialog.select_next();
+            } else {
+                dialog.select_previous();
+            }
+            return;
+        }
         self.update_onboarding(|state| {
             if next {
                 state.select_next();
@@ -611,6 +708,10 @@ impl App {
     }
 
     fn toggle_modal(&mut self) {
+        if let Some(Modal::Account(dialog)) = self.modal.as_mut() {
+            dialog.toggle_action();
+            return;
+        }
         self.update_onboarding(|state| {
             state.toggle();
             OnboardingCommand::None
@@ -622,6 +723,7 @@ impl App {
             Some(Modal::Onboarding(state)) => state.input(value),
             Some(Modal::Credential(editor)) => editor.input(value),
             Some(Modal::PlaylistImport(editor)) => editor.input(value),
+            Some(Modal::Account(dialog)) => dialog.input(value),
             _ => {}
         }
     }
@@ -631,6 +733,7 @@ impl App {
             Some(Modal::Onboarding(state)) => state.backspace(),
             Some(Modal::Credential(editor)) => editor.backspace(),
             Some(Modal::PlaylistImport(editor)) => editor.backspace(),
+            Some(Modal::Account(dialog)) => dialog.backspace(),
             _ => {}
         }
     }
@@ -681,6 +784,120 @@ impl App {
                 }
                 self.status_message = format!("Импорт не удался: {error}");
             }
+        }
+    }
+
+    fn finish_account_captcha(
+        &mut self,
+        action: AccountAction,
+        result: Result<CaptchaChallenge, AccountApiError>,
+    ) {
+        let Some(Modal::Account(dialog)) = self.modal.as_mut() else {
+            return;
+        };
+        if dialog.action != action {
+            return;
+        }
+        match result {
+            Ok(challenge) => match dialog.set_challenge(challenge) {
+                Ok(()) => {
+                    self.status_message = "Нажми четыре иконки по порядку".to_string();
+                }
+                Err(error) => {
+                    dialog.stage = AccountDialogStage::Credentials;
+                    dialog.error = Some(error.to_string());
+                    self.status_message = format!("CAPTCHA не открылась: {error}");
+                }
+            },
+            Err(error) => {
+                dialog.stage = AccountDialogStage::Credentials;
+                dialog.error = Some(error.to_string());
+                self.status_message = format!("CAPTCHA не загрузилась: {error}");
+            }
+        }
+    }
+
+    fn finish_authentication(&mut self, result: Result<AccountSession, AccountApiError>) {
+        match result {
+            Ok(session) => {
+                let name = session.user.display_name.clone();
+                self.account = AccountState::Authenticated {
+                    user: session.user,
+                    expires_at: session.expires_at,
+                };
+                self.modal = None;
+                self.config_dirty = true;
+                self.status_message = format!("Вход выполнен: {name}");
+            }
+            Err(error) => {
+                if let Some(Modal::Account(dialog)) = self.modal.as_mut() {
+                    if error.code == "CAPTCHA_INVALID" {
+                        dialog.authentication_failed(error.to_string());
+                    } else {
+                        dialog.stage = AccountDialogStage::Credentials;
+                        dialog.error = Some(error.to_string());
+                    }
+                }
+                self.status_message = format!("Не удалось войти: {error}");
+            }
+        }
+    }
+
+    fn finish_account_restore(&mut self, result: Result<Option<AccountSession>, AccountApiError>) {
+        match result {
+            Ok(Some(session)) => {
+                let name = session.user.display_name.clone();
+                self.account = AccountState::Authenticated {
+                    user: session.user,
+                    expires_at: session.expires_at,
+                };
+                self.status_message = format!("Сессия восстановлена: {name}");
+            }
+            Ok(None) => {
+                self.account = AccountState::Guest;
+                self.status_message = "Гостевой режим".to_string();
+            }
+            Err(error) => {
+                self.account = AccountState::Guest;
+                self.status_message = format!("Сессию не удалось проверить: {error}");
+            }
+        }
+    }
+
+    fn finish_logout(&mut self, result: Result<(), AccountApiError>) {
+        self.account = AccountState::Guest;
+        self.modal = None;
+        self.config_dirty = true;
+        self.status_message = match result {
+            Ok(()) => "Выход выполнен".to_string(),
+            Err(error) => format!("Локально вышли, сервер не подтвердил: {error}"),
+        };
+    }
+
+    fn toggle_account_mode(&mut self) {
+        if let Some(Modal::Account(dialog)) = self.modal.as_mut() {
+            dialog.toggle_action();
+        }
+    }
+
+    fn logout_account(&mut self) {
+        if matches!(self.account, AccountState::Authenticated { .. }) {
+            self.status_message = "Выходим из Noverplay".to_string();
+            self.effects.push(AppEffect::LogoutAccount);
+        }
+    }
+
+    fn click_modal(&mut self, column: u16, row: u16, terminal_width: u16, terminal_height: u16) {
+        let Some(Modal::Account(dialog)) = self.modal.as_mut() else {
+            return;
+        };
+        dialog.click(column, row, terminal_width, terminal_height);
+        if dialog.stage == AccountDialogStage::Captcha {
+            self.status_message = format!(
+                "CAPTCHA: выбрано {}/{}",
+                dialog.selected_clicks(),
+                dialog.required_clicks()
+            );
         }
     }
 
@@ -736,6 +953,8 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
     use super::*;
     use crate::{
         config::AppConfig,
@@ -811,6 +1030,73 @@ mod tests {
                 value: "client-id".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn profile_turns_credentials_and_human_clicks_into_a_login_request() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(
+            &storage,
+            &AppConfig {
+                onboarding_completed: true,
+                ..AppConfig::default()
+            },
+        )
+        .unwrap();
+        app.handle(Action::Navigate(Screen::Profile));
+        app.handle(Action::Activate);
+        for value in "User123".chars() {
+            app.handle(Action::ModalInput(value));
+        }
+        app.handle(Action::ModalNext);
+        for value in "password123".chars() {
+            app.handle(Action::ModalInput(value));
+        }
+        app.handle(Action::ModalSubmit);
+        assert_eq!(
+            app.take_effects(),
+            vec![AppEffect::LoadAccountCaptcha(AccountAction::Login)]
+        );
+
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="236"><rect width="360" height="236" fill="#ffffff"/></svg>"##;
+        app.handle(Action::AccountCaptchaLoaded {
+            action: AccountAction::Login,
+            result: Ok(CaptchaChallenge {
+                captcha_id: "captcha".to_string(),
+                captcha_kind: "icon_sequence".to_string(),
+                image_data_url: format!("data:image/svg+xml;base64,{}", STANDARD.encode(svg)),
+                click_count_required: 4,
+                action_type: "login".to_string(),
+                expires_at: "later".to_string(),
+                disabled: false,
+            }),
+        });
+        let area = crate::account::captcha::captcha_cell_area(100, 32);
+        for offset in 1..=4 {
+            app.handle(Action::MouseClick {
+                column: area.x + offset,
+                row: area.y + 2,
+                terminal_width: 100,
+                terminal_height: 32,
+            });
+        }
+        app.handle(Action::ModalSubmit);
+
+        assert!(matches!(
+            app.take_effects().as_slice(),
+            [AppEffect::AuthenticateAccount {
+                action: AccountAction::Login,
+                username,
+                password,
+                captcha_id,
+                solution,
+            }] if username == "User123"
+                && password == "password123"
+                && captcha_id == "captcha"
+                && solution.points.len() == 4
+        ));
     }
 
     #[test]

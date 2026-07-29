@@ -1,8 +1,13 @@
 use std::path::PathBuf;
 
-use crate::{credentials::CredentialKind, model::TrackRef, onboarding::zapret::ZapretPlan};
+use crate::{
+    account::models::{AccountAction, CaptchaSolution},
+    credentials::CredentialKind,
+    model::TrackRef,
+    onboarding::zapret::ZapretPlan,
+};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AppEffect {
     Search {
         query: String,
@@ -14,6 +19,16 @@ pub enum AppEffect {
         value: String,
     },
     ImportPlaylist(String),
+    LoadAccountCaptcha(AccountAction),
+    AuthenticateAccount {
+        action: AccountAction,
+        username: String,
+        password: String,
+        captcha_id: String,
+        solution: CaptchaSolution,
+    },
+    RestoreAccount,
+    LogoutAccount,
     ProbeSoundCloud,
     PlanZapret(PathBuf),
     ApplyZapret(Box<ZapretPlan>),

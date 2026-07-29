@@ -1,3 +1,4 @@
+mod account;
 mod credential;
 mod import;
 mod onboarding;
@@ -131,7 +132,7 @@ fn draw_screen(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
     match app.screen {
         Screen::Playlists => draw_playlists(frame, app, rows[1]),
-        Screen::Profile => draw_profile(frame, rows[1]),
+        Screen::Profile => draw_profile(frame, app, rows[1]),
         Screen::Settings => draw_settings(frame, app, rows[1]),
         _ => draw_tracks(frame, app, rows[1]),
     }
@@ -225,20 +226,47 @@ fn draw_playlists(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
 }
 
-fn draw_profile(frame: &mut Frame<'_>, area: Rect) {
-    frame.render_widget(
-        Paragraph::new(vec![
+fn draw_profile(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let lines = match &app.account {
+        crate::account::state::AccountState::Guest => vec![
             Line::from(""),
             Line::styled("             ●", Style::new().fg(PRIMARY)),
             Line::styled("         Гостевой режим", Style::new().fg(Color::White)),
             Line::from(""),
+            Line::styled("  Enter  войти или создать аккаунт", Style::new().fg(MUTED)),
             Line::styled(
-                "  Войди в Noverplay для серверного client_id",
+                "  Без аккаунта SoundCloud работает только со своим client_id",
                 Style::new().fg(MUTED),
             ),
-        ]),
-        area,
-    );
+        ],
+        crate::account::state::AccountState::Restoring => vec![
+            Line::from(""),
+            Line::styled(
+                "       Проверяем сохранённую сессию",
+                Style::new().fg(Color::White),
+            ),
+        ],
+        crate::account::state::AccountState::Authenticated { user, expires_at } => vec![
+            Line::from(""),
+            Line::styled("             ●", Style::new().fg(PRIMARY)),
+            Line::styled(
+                format!("         {}", user.display_name),
+                Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+            Line::styled(
+                format!("         @{}", user.username),
+                Style::new().fg(MUTED),
+            ),
+            Line::styled(
+                format!("         ID {}", user.public_uid),
+                Style::new().fg(MUTED),
+            ),
+            Line::from(""),
+            Line::styled(format!("  Сессия до {expires_at}"), Style::new().fg(MUTED)),
+            Line::styled("  x  выйти из аккаунта", Style::new().fg(Color::White)),
+        ],
+    };
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -353,15 +381,20 @@ fn draw_modal(frame: &mut Frame<'_>, app: &App, modal: &Modal, area: Rect) {
         import::draw(frame, editor, area);
         return;
     }
+    if let Modal::Account(dialog) = modal {
+        account::draw(frame, dialog, area);
+        return;
+    }
     let popup = centered_rect(64, 60, area);
     frame.render_widget(Clear, popup);
     let (title, body) = match modal {
         Modal::Onboarding(_) => unreachable!(),
         Modal::Credential(_) => unreachable!(),
         Modal::PlaylistImport(_) => unreachable!(),
+        Modal::Account(_) => unreachable!(),
         Modal::Help => (
             " Клавиши ",
-            "1-8 разделы    / поиск\ni импорт          Enter открыть\n↑↓ или jk выбор   Space пауза\nn/p трек          ←→ или hl ±10 сек\n+/- громкость     s/r режимы\nq выход           Esc закрыть",
+            "1-8 разделы    / поиск\ni импорт          Enter открыть или войти\n↑↓ или jk выбор   Space пауза\nn/p трек          ←→ или hl ±10 сек\n+/- громкость     s/r режимы\nx выйти из аккаунта\nF2 вход/регистрация, мышь CAPTCHA\nq выход           Esc закрыть",
         ),
         Modal::CommandPalette => (
             " Команды ",
@@ -541,5 +574,39 @@ mod tests {
         let content = terminal.backend().to_string();
         assert!(content.contains("SoundCloud client_id"));
         assert!(!content.contains("super-secret-client-id"));
+    }
+
+    #[test]
+    fn profile_explains_the_actual_login_key() {
+        let (_temp, mut app) = app();
+        app.screen = Screen::Profile;
+        let backend = TestBackend::new(100, 28);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+
+        let content = terminal.backend().to_string();
+        assert!(content.contains("Enter  войти или создать аккаунт"));
+        assert!(content.contains("со своим client_id"));
+    }
+
+    #[test]
+    fn account_window_masks_password_and_shows_mode_switch() {
+        let (_temp, mut app) = app();
+        let mut dialog =
+            crate::account::state::AccountDialog::new(crate::account::models::AccountAction::Login);
+        dialog.username = "User123".to_string();
+        dialog.password = "password123".to_string();
+        app.modal = Some(Modal::Account(Box::new(dialog)));
+        let backend = TestBackend::new(100, 32);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+
+        let content = terminal.backend().to_string();
+        assert!(content.contains("Вход в Noverplay"));
+        assert!(content.contains("F2"));
+        assert!(content.contains("User123"));
+        assert!(!content.contains("password123"));
     }
 }

@@ -1,3 +1,4 @@
+mod account;
 mod importer;
 mod message;
 mod onboarding;
@@ -14,6 +15,7 @@ use std::{
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
+    account::{client::AccountClient, error::AccountApiError},
     action::Action,
     audio::{AudioEngine, AudioStatus},
     config::AppConfig,
@@ -24,6 +26,9 @@ use crate::{
     storage::{HistoryEntry, Storage},
 };
 
+use account::{
+    AuthenticationRequest, spawn_authentication, spawn_captcha, spawn_logout, spawn_restore,
+};
 use importer::spawn_import;
 use message::RuntimeMessage;
 use onboarding::{spawn_soundcloud_probe, spawn_zapret_apply, spawn_zapret_plan};
@@ -34,6 +39,7 @@ use wave::spawn_wave;
 
 pub struct Runtime {
     providers: Arc<ProviderRegistry>,
+    account_client: Option<Arc<AccountClient>>,
     config: AppConfig,
     secrets: SecretStore,
     audio: Option<AudioEngine>,
@@ -43,11 +49,13 @@ pub struct Runtime {
     playback_task: Option<JoinHandle<()>>,
     wave_task: Option<JoinHandle<()>>,
     import_task: Option<JoinHandle<()>>,
+    account_task: Option<JoinHandle<()>>,
     onboarding_task: Option<JoinHandle<()>>,
     search_generation: u64,
     playback_generation: u64,
     wave_generation: u64,
     import_generation: u64,
+    account_generation: u64,
     onboarding_generation: u64,
     search_delay: Duration,
     last_audio_status: Option<AudioStatus>,
@@ -61,6 +69,13 @@ impl Runtime {
     pub fn new(config: &AppConfig, secrets: &SecretStore, storage: Storage) -> Self {
         let setup = build_registry(config, secrets);
         let mut notices = setup.notices;
+        let account_client = match AccountClient::new(&config.server_url, secrets) {
+            Ok(client) => Some(Arc::new(client)),
+            Err(error) => {
+                notices.push(format!("Аккаунт недоступен: {error}"));
+                None
+            }
+        };
         let audio = match AudioEngine::new(config.audio_output.as_deref(), config.volume_percent) {
             Ok(audio) => Some(audio),
             Err(error) => {
@@ -71,6 +86,7 @@ impl Runtime {
         let (sender, receiver) = mpsc::unbounded_channel();
         Self {
             providers: Arc::new(setup.registry),
+            account_client,
             config: config.clone(),
             secrets: secrets.clone(),
             audio,
@@ -80,11 +96,13 @@ impl Runtime {
             playback_task: None,
             wave_task: None,
             import_task: None,
+            account_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
             import_generation: 0,
+            account_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::from_millis(config.search_debounce_ms),
             last_audio_status: None,
@@ -108,6 +126,27 @@ impl Runtime {
                 }
                 AppEffect::GenerateWave => self.start_wave(&mut actions),
                 AppEffect::ImportPlaylist(source) => self.start_import(source),
+                AppEffect::LoadAccountCaptcha(action) => {
+                    self.start_account_captcha(action, &mut actions)
+                }
+                AppEffect::AuthenticateAccount {
+                    action,
+                    username,
+                    password,
+                    captcha_id,
+                    solution,
+                } => self.start_authentication(
+                    AuthenticationRequest {
+                        action,
+                        username,
+                        password,
+                        captcha_id,
+                        solution,
+                    },
+                    &mut actions,
+                ),
+                AppEffect::RestoreAccount => self.start_restore(&mut actions),
+                AppEffect::LogoutAccount => self.start_logout(&mut actions),
                 AppEffect::SaveCredential { kind, value } => {
                     actions.push(Action::CredentialSaved {
                         kind,
@@ -223,6 +262,28 @@ impl Runtime {
                     if generation == self.import_generation =>
                 {
                     actions.push(Action::PlaylistImported(result));
+                }
+                RuntimeMessage::AccountCaptcha {
+                    generation,
+                    action,
+                    result,
+                } if generation == self.account_generation => {
+                    actions.push(Action::AccountCaptchaLoaded { action, result });
+                }
+                RuntimeMessage::AccountAuthenticated { generation, result }
+                    if generation == self.account_generation =>
+                {
+                    actions.push(Action::AccountAuthenticated(result));
+                }
+                RuntimeMessage::AccountRestored { generation, result }
+                    if generation == self.account_generation =>
+                {
+                    actions.push(Action::AccountRestored(result));
+                }
+                RuntimeMessage::AccountLoggedOut { generation, result }
+                    if generation == self.account_generation =>
+                {
+                    actions.push(Action::AccountLoggedOut(result));
                 }
                 RuntimeMessage::SoundCloudChecked { generation, access }
                     if generation == self.onboarding_generation =>
@@ -402,6 +463,81 @@ impl Runtime {
         ));
     }
 
+    fn start_account_captcha(
+        &mut self,
+        action: crate::account::models::AccountAction,
+        actions: &mut Vec<Action>,
+    ) {
+        let Some(client) = self.account_client.clone() else {
+            actions.push(Action::AccountCaptchaLoaded {
+                action,
+                result: Err(account_unavailable()),
+            });
+            return;
+        };
+        self.cancel_account_task();
+        self.account_task = Some(spawn_captcha(
+            client,
+            self.sender.clone(),
+            self.account_generation,
+            action,
+        ));
+    }
+
+    fn start_authentication(&mut self, request: AuthenticationRequest, actions: &mut Vec<Action>) {
+        let Some(client) = self.account_client.clone() else {
+            actions.push(Action::AccountAuthenticated(Err(account_unavailable())));
+            return;
+        };
+        self.cancel_account_task();
+        self.account_task = Some(spawn_authentication(
+            client,
+            self.secrets.clone(),
+            self.sender.clone(),
+            self.account_generation,
+            request,
+        ));
+    }
+
+    fn start_restore(&mut self, actions: &mut Vec<Action>) {
+        let Some(client) = self.account_client.clone() else {
+            actions.push(Action::AccountRestored(Err(account_unavailable())));
+            return;
+        };
+        self.cancel_account_task();
+        self.account_task = Some(spawn_restore(
+            client,
+            self.secrets.clone(),
+            self.sender.clone(),
+            self.account_generation,
+        ));
+    }
+
+    fn start_logout(&mut self, actions: &mut Vec<Action>) {
+        let Some(client) = self.account_client.clone() else {
+            let result = self
+                .secrets
+                .remove(crate::secrets::SecretKey::SessionToken)
+                .map_err(|error| AccountApiError::local("SESSION_REMOVE", error.to_string()));
+            actions.push(Action::AccountLoggedOut(result));
+            return;
+        };
+        self.cancel_account_task();
+        self.account_task = Some(spawn_logout(
+            client,
+            self.secrets.clone(),
+            self.sender.clone(),
+            self.account_generation,
+        ));
+    }
+
+    fn cancel_account_task(&mut self) {
+        if let Some(task) = self.account_task.take() {
+            task.abort();
+        }
+        self.account_generation = self.account_generation.wrapping_add(1);
+    }
+
     fn cancel_playback(&mut self) {
         if let Some(task) = self.playback_task.take() {
             task.abort();
@@ -417,9 +553,6 @@ impl Runtime {
         spawn: impl FnOnce(mpsc::UnboundedSender<RuntimeMessage>, u64) -> JoinHandle<()>,
     ) {
         if let Some(task) = self.onboarding_task.take() {
-            task.abort();
-        }
-        if let Some(task) = self.import_task.take() {
             task.abort();
         }
         self.onboarding_generation = self.onboarding_generation.wrapping_add(1);
@@ -461,7 +594,20 @@ impl Drop for Runtime {
         if let Some(task) = self.onboarding_task.take() {
             task.abort();
         }
+        if let Some(task) = self.import_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.account_task.take() {
+            task.abort();
+        }
     }
+}
+
+fn account_unavailable() -> AccountApiError {
+    AccountApiError::local(
+        "ACCOUNT_CLIENT_UNAVAILABLE",
+        "Клиент аккаунта не запустился, проверь адрес сервера в config.toml",
+    )
 }
 
 #[cfg(test)]
@@ -473,6 +619,7 @@ mod tests {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut runtime = Runtime {
             providers: Arc::new(ProviderRegistry::default()),
+            account_client: None,
             config: AppConfig::default(),
             secrets: SecretStore::new(std::path::PathBuf::from("unused-secrets.json")),
             audio: None,
@@ -482,11 +629,13 @@ mod tests {
             playback_task: None,
             wave_task: None,
             import_task: None,
+            account_task: None,
             onboarding_task: None,
             search_generation: 7,
             playback_generation: 3,
             wave_generation: 0,
             import_generation: 0,
+            account_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,
@@ -530,6 +679,7 @@ mod tests {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut runtime = Runtime {
             providers: Arc::new(ProviderRegistry::default()),
+            account_client: None,
             config: AppConfig::default(),
             secrets: SecretStore::new(std::path::PathBuf::from("unused-secrets.json")),
             audio: None,
@@ -539,11 +689,13 @@ mod tests {
             playback_task: None,
             wave_task: None,
             import_task: None,
+            account_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
             import_generation: 0,
+            account_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::from_secs(1),
             last_audio_status: None,
@@ -569,6 +721,7 @@ mod tests {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut runtime = Runtime {
             providers: Arc::new(ProviderRegistry::default()),
+            account_client: None,
             config: AppConfig::default(),
             secrets: SecretStore::file_only(temp.path().join("secrets.json")),
             audio: None,
@@ -578,11 +731,13 @@ mod tests {
             playback_task: None,
             wave_task: None,
             import_task: None,
+            account_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
             import_generation: 0,
+            account_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,
@@ -617,6 +772,7 @@ mod tests {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut runtime = Runtime {
             providers: Arc::new(ProviderRegistry::default()),
+            account_client: None,
             config: AppConfig::default(),
             secrets: SecretStore::new(std::path::PathBuf::from("unused-secrets.json")),
             audio: None,
@@ -626,11 +782,13 @@ mod tests {
             playback_task: None,
             wave_task: None,
             import_task: None,
+            account_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
             import_generation: 0,
+            account_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,
@@ -655,6 +813,7 @@ mod tests {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut runtime = Runtime {
             providers: Arc::new(ProviderRegistry::default()),
+            account_client: None,
             config: AppConfig::default(),
             secrets: SecretStore::new(std::path::PathBuf::from("unused-secrets.json")),
             audio: None,
@@ -664,11 +823,13 @@ mod tests {
             playback_task: None,
             wave_task: None,
             import_task: None,
+            account_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
             import_generation: 0,
+            account_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,

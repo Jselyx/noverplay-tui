@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use crossterm::event::{Event as CrosstermEvent, EventStream, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    Event as CrosstermEvent, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseButton,
+    MouseEventKind,
+};
 use futures_util::StreamExt;
 use tokio::time::{Interval, interval};
 
@@ -9,6 +12,7 @@ use crate::{action::Action, app::Screen};
 pub struct EventPump {
     terminal: EventStream,
     tick: Interval,
+    terminal_size: (u16, u16),
 }
 
 impl EventPump {
@@ -21,6 +25,7 @@ impl EventPump {
         Self {
             terminal: EventStream::new(),
             tick: interval(Duration::from_millis(1_000 / frame_limit)),
+            terminal_size: crossterm::terminal::size().unwrap_or((80, 24)),
         }
     }
 
@@ -38,10 +43,19 @@ impl EventPump {
                     Some(Ok(CrosstermEvent::Key(key))) if key.is_press() => {
                         map_key(key, search_mode, modal_open, text_modal, search_has_results)
                     }
-                    Some(Ok(CrosstermEvent::Resize(_, _))) => Action::Resize,
+                    Some(Ok(CrosstermEvent::Resize(width, height))) => {
+                        self.terminal_size = (width, height);
+                        Action::Resize
+                    }
                     Some(Ok(CrosstermEvent::Mouse(mouse))) => match mouse.kind {
-                        crossterm::event::MouseEventKind::ScrollUp => Action::SelectPrevious,
-                        crossterm::event::MouseEventKind::ScrollDown => Action::SelectNext,
+                        MouseEventKind::ScrollUp => Action::SelectPrevious,
+                        MouseEventKind::ScrollDown => Action::SelectNext,
+                        MouseEventKind::Down(MouseButton::Left) => Action::MouseClick {
+                            column: mouse.column,
+                            row: mouse.row,
+                            terminal_width: self.terminal_size.0,
+                            terminal_height: self.terminal_size.1,
+                        },
                         _ => Action::Resize,
                     },
                     _ => Action::Tick,
@@ -69,6 +83,7 @@ fn map_key(
         if text_modal {
             return match key.code {
                 KeyCode::Esc => Action::CloseModal,
+                KeyCode::F(2) => Action::ToggleAccountMode,
                 KeyCode::Enter => Action::ModalSubmit,
                 KeyCode::Tab | KeyCode::Down => Action::ModalNext,
                 KeyCode::BackTab | KeyCode::Up => Action::ModalPrevious,
@@ -108,6 +123,7 @@ fn map_key(
         KeyCode::Char('?') => Action::OpenHelp,
         KeyCode::Char('/') => Action::StartSearch,
         KeyCode::Char('i') => Action::OpenPlaylistImport,
+        KeyCode::Char('x') => Action::AccountLogout,
         KeyCode::Char(' ') => Action::TogglePause,
         KeyCode::Char('j') | KeyCode::Down => Action::SelectNext,
         KeyCode::Char('k') | KeyCode::Up => Action::SelectPrevious,
@@ -193,5 +209,19 @@ mod tests {
                 Action::ModalInput(value)
             );
         }
+    }
+
+    #[test]
+    fn account_mode_has_a_key_that_does_not_end_up_in_the_password() {
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE),
+                false,
+                true,
+                true,
+                false,
+            ),
+            Action::ToggleAccountMode
+        );
     }
 }

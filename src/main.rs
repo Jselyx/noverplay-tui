@@ -53,6 +53,7 @@ async fn run_tui() -> Result<()> {
     if let Some(notice) = runtime.take_notices().into_iter().last() {
         app.status_message = notice;
     }
+    app.restore_account();
     let mut terminal = TerminalGuard::enter()?;
     let mut events = EventPump::with_frame_limit(config.frame_limit);
 
@@ -98,6 +99,7 @@ async fn run_tui() -> Result<()> {
             config.volume_percent = app.player.volume_percent;
             config.soundcloud_enabled = app.soundcloud_enabled;
             config.yandex_enabled = app.yandex_enabled;
+            config.guest_mode = app.account.user().is_none();
             config.save(&paths)?;
             app.config_dirty = false;
         }

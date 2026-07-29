@@ -60,6 +60,12 @@ pub struct LoginResponse {
     pub expires_at: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccountSession {
+    pub user: AccountUser,
+    pub expires_at: String,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionResponse {
     pub user: AccountUser,

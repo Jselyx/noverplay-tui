@@ -1,4 +1,8 @@
 use crate::{
+    account::{
+        error::AccountApiError,
+        models::{AccountAction, AccountSession, CaptchaChallenge},
+    },
     model::{PlaybackSource, Playlist, TrackRef},
     onboarding::{
         SoundCloudAccess,
@@ -21,6 +25,23 @@ pub(super) enum RuntimeMessage {
     PlaylistImported {
         generation: u64,
         result: Result<Playlist, String>,
+    },
+    AccountCaptcha {
+        generation: u64,
+        action: AccountAction,
+        result: Result<CaptchaChallenge, AccountApiError>,
+    },
+    AccountAuthenticated {
+        generation: u64,
+        result: Result<AccountSession, AccountApiError>,
+    },
+    AccountRestored {
+        generation: u64,
+        result: Result<Option<AccountSession>, AccountApiError>,
+    },
+    AccountLoggedOut {
+        generation: u64,
+        result: Result<(), AccountApiError>,
     },
     PlaybackReady {
         generation: u64,
