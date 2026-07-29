@@ -26,6 +26,7 @@ pub enum Action {
     Seek(i64),
     ToggleShuffle,
     CycleRepeat,
+    ToggleLike,
     StartSearch,
     SearchInput(char),
     SearchBackspace,
@@ -69,6 +70,11 @@ pub enum Action {
         result: Result<(), String>,
     },
     PlaylistImported(Result<crate::model::Playlist, String>),
+    LikeSaved {
+        track: Box<TrackRef>,
+        liked: bool,
+        result: Result<(), String>,
+    },
     AccountCaptchaLoaded {
         action: AccountAction,
         result: Result<CaptchaChallenge, AccountApiError>,

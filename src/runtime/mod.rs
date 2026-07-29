@@ -126,6 +126,13 @@ impl Runtime {
                     self.start_search(query, immediate, &mut actions)
                 }
                 AppEffect::GenerateWave => self.start_wave(&mut actions),
+                AppEffect::SetLiked { track, liked } => {
+                    actions.push(Action::LikeSaved {
+                        result: self.set_liked(&track, liked),
+                        track,
+                        liked,
+                    });
+                }
                 AppEffect::ImportPlaylist(source) => self.start_import(source),
                 AppEffect::LoadAccountCaptcha(action) => {
                     self.start_account_captcha(action, &mut actions)
@@ -372,6 +379,23 @@ impl Runtime {
         self.providers = Arc::new(setup.registry);
         self.notices.extend(setup.notices);
         Ok(())
+    }
+
+    fn set_liked(&self, track: &crate::model::TrackRef, liked: bool) -> Result<(), String> {
+        if liked {
+            let liked_at_ms = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+                .unwrap_or_default();
+            self.storage
+                .like_track(track, liked_at_ms)
+                .map_err(|error| error.to_string())
+        } else {
+            self.storage
+                .unlike_track(track)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }
     }
 
     fn start_search(&mut self, query: String, immediate: bool, actions: &mut Vec<Action>) {

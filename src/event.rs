@@ -123,6 +123,7 @@ fn map_key(
         KeyCode::Char('?') => Action::OpenHelp,
         KeyCode::Char('/') => Action::StartSearch,
         KeyCode::Char('i') => Action::OpenPlaylistImport,
+        KeyCode::Char('f') => Action::ToggleLike,
         KeyCode::Char('x') => Action::AccountLogout,
         KeyCode::Char(' ') => Action::TogglePause,
         KeyCode::Char('j') | KeyCode::Down => Action::SelectNext,

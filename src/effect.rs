@@ -14,6 +14,10 @@ pub enum AppEffect {
         immediate: bool,
     },
     GenerateWave,
+    SetLiked {
+        track: Box<TrackRef>,
+        liked: bool,
+    },
     SaveCredential {
         kind: CredentialKind,
         value: String,

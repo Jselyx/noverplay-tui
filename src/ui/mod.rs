@@ -167,7 +167,13 @@ fn draw_tracks(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let items = tracks
         .iter()
         .enumerate()
-        .map(track_item)
+        .map(|item| {
+            let liked = app
+                .library
+                .iter()
+                .any(|track| track.provider_key() == item.1.provider_key());
+            track_item(item, liked)
+        })
         .collect::<Vec<_>>();
     let mut state = ListState::default().with_selected(Some(app.selected));
     frame.render_stateful_widget(
@@ -182,7 +188,7 @@ fn draw_tracks(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
-fn track_item((index, track): (usize, &TrackRef)) -> ListItem<'static> {
+fn track_item((index, track): (usize, &TrackRef), liked: bool) -> ListItem<'static> {
     let duration = track
         .duration_ms
         .map(format_duration)
@@ -190,7 +196,10 @@ fn track_item((index, track): (usize, &TrackRef)) -> ListItem<'static> {
     let source = track.provider.label();
     ListItem::new(vec![
         Line::from(vec![
-            Span::styled(format!(" {:02}  ", index + 1), Style::new().fg(MUTED)),
+            Span::styled(
+                format!(" {:02} {} ", index + 1, if liked { "♥" } else { " " }),
+                Style::new().fg(MUTED),
+            ),
             Span::styled(track.title.clone(), Style::new().fg(Color::White)),
             Span::styled(format!("  {duration}"), Style::new().fg(MUTED)),
         ]),
@@ -410,7 +419,7 @@ fn draw_modal(frame: &mut Frame<'_>, app: &App, modal: &Modal, area: Rect) {
         Modal::Account(_) => unreachable!(),
         Modal::Help => (
             " Клавиши ",
-            "1-8 разделы    / поиск\ni импорт          Enter открыть или войти\n↑↓ или jk выбор   Space пауза\nn/p трек          ←→ или hl ±10 сек\n+/- громкость     s/r режимы\nx выйти из аккаунта\nF2 вход/регистрация, мышь CAPTCHA\nq выход           Esc закрыть",
+            "1-8 разделы    / поиск\ni импорт          f лайк\nEnter открыть или войти\n↑↓ или jk выбор   Space пауза\nn/p трек          ←→ или hl ±10 сек\n+/- громкость     s/r режимы\nx выйти из аккаунта\nF2 вход/регистрация, мышь CAPTCHA\nq выход           Esc закрыть",
         ),
         Modal::CommandPalette => (
             " Команды ",

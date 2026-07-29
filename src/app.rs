@@ -277,6 +277,7 @@ impl App {
                 };
                 self.queue_dirty = true;
             }
+            Action::ToggleLike => self.toggle_like(),
             Action::StartSearch => {
                 self.screen = Screen::Search;
                 self.selected = 0;
@@ -367,6 +368,11 @@ impl App {
             Action::ModalBackspace => self.backspace_modal(),
             Action::CredentialSaved { kind, result } => self.finish_credential_save(kind, result),
             Action::PlaylistImported(result) => self.finish_playlist_import(result),
+            Action::LikeSaved {
+                track,
+                liked,
+                result,
+            } => self.finish_like(*track, liked, result),
             Action::AccountCaptchaLoaded { action, result } => {
                 self.finish_account_captcha(action, result)
             }
@@ -814,6 +820,46 @@ impl App {
         }
     }
 
+    fn toggle_like(&mut self) {
+        let Some(track) = self.selected_tracks().get(self.selected).cloned() else {
+            return;
+        };
+        let key = track.provider_key();
+        let liked = !self
+            .library
+            .iter()
+            .any(|current| current.provider_key() == key);
+        if liked {
+            self.library.insert(0, track.clone());
+            self.status_message = format!("Добавили «{}» в библиотеку", track.title);
+        } else {
+            self.library.retain(|current| current.provider_key() != key);
+            self.selected = self.selected.min(self.item_count().saturating_sub(1));
+            self.status_message = format!("Убрали «{}» из библиотеки", track.title);
+        }
+        self.effects.push(AppEffect::SetLiked {
+            track: Box::new(track),
+            liked,
+        });
+    }
+
+    fn finish_like(&mut self, track: TrackRef, liked: bool, result: Result<(), String>) {
+        let Err(error) = result else {
+            return;
+        };
+        let key = track.provider_key();
+        if liked {
+            self.library.retain(|current| current.provider_key() != key);
+        } else if !self
+            .library
+            .iter()
+            .any(|current| current.provider_key() == key)
+        {
+            self.library.insert(0, track);
+        }
+        self.status_message = format!("Библиотека не сохранилась: {error}");
+    }
+
     fn finish_account_captcha(
         &mut self,
         action: AccountAction,
@@ -1123,6 +1169,49 @@ mod tests {
             vec![AppEffect::SaveCredential {
                 kind: CredentialKind::SoundCloudClientId,
                 value: "client-id".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn favorite_key_updates_library_and_asks_runtime_to_persist_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(
+            &storage,
+            &AppConfig {
+                onboarding_completed: true,
+                ..AppConfig::default()
+            },
+        )
+        .unwrap();
+        let track = test_track();
+        app.screen = Screen::Search;
+        app.search_results.push(track.clone());
+
+        app.handle(Action::ToggleLike);
+
+        assert_eq!(app.library, vec![track.clone()]);
+        assert_eq!(
+            app.take_effects(),
+            vec![AppEffect::SetLiked {
+                track: Box::new(track.clone()),
+                liked: true,
+            }]
+        );
+        app.handle(Action::LikeSaved {
+            track: Box::new(track.clone()),
+            liked: true,
+            result: Ok(()),
+        });
+        app.handle(Action::ToggleLike);
+        assert!(app.library.is_empty());
+        assert_eq!(
+            app.take_effects(),
+            vec![AppEffect::SetLiked {
+                track: Box::new(track),
+                liked: false,
             }]
         );
     }
