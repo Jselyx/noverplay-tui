@@ -8,7 +8,8 @@ use url::Url;
 
 use super::{
     WaveCandidate, WaveCandidateOrigin, WaveGenreProfile, WaveMode, WaveMood, WaveQueueQuotas,
-    WaveRankInput, WaveSettings, WaveSourceMode, WaveTasteProfile, rank_candidates,
+    WaveRankInput, WaveReason, WaveSettings, WaveSourceMode, WaveTasteProfile, rank_candidates,
+    select_ranked,
 };
 
 #[test]
@@ -218,6 +219,61 @@ fn balanced_score_prefers_recent_artist_with_pc_weights() {
     assert_eq!(ranked[0].track, known);
 }
 
+#[test]
+fn selector_enforces_artist_streak_without_shrinking_queue() {
+    let settings = WaveSettings {
+        size: 3,
+        max_artist_streak: 1,
+        primary_provider: ProviderKind::SoundCloud,
+        ..WaveSettings::default()
+    };
+    let ranked = vec![
+        ranked("1", "Same", 3.0),
+        ranked("2", "Same", 2.0),
+        ranked("3", "Other", 1.0),
+    ];
+    let selected = select_ranked(
+        ranked,
+        &settings,
+        WaveQueueQuotas {
+            core: 3,
+            related: 0,
+            favorites: 0,
+            discovery: 0,
+        },
+    );
+    assert_eq!(selected.len(), 3);
+    assert_eq!(selected[0].track.id, "1");
+    assert_eq!(selected[1].track.id, "3");
+    assert_eq!(selected[2].track.id, "2");
+}
+
+#[test]
+fn selector_rotates_language_then_falls_back_like_pc() {
+    let settings = WaveSettings {
+        size: 2,
+        primary_provider: ProviderKind::SoundCloud,
+        language_rotation: vec!["ru".to_string(), "en".to_string()],
+        ..WaveSettings::default()
+    };
+    let mut english = ranked("en", "Artist", 5.0);
+    english.track.title = "English Track".to_string();
+    let mut russian = ranked("ru", "Исполнитель", 1.0);
+    russian.track.title = "Русский трек".to_string();
+    let selected = select_ranked(
+        vec![english, russian],
+        &settings,
+        WaveQueueQuotas {
+            core: 2,
+            related: 0,
+            favorites: 0,
+            discovery: 0,
+        },
+    );
+    assert_eq!(selected[0].track.id, "ru");
+    assert_eq!(selected[1].track.id, "en");
+}
+
 fn history(track: TrackRef, played_at_ms: i64) -> HistoryEntry {
     HistoryEntry {
         track,
@@ -239,5 +295,19 @@ fn track(id: &str, artist: &str) -> TrackRef {
         capability: PlaybackCapability::Full,
         genres: Vec::new(),
         explicit: false,
+    }
+}
+
+fn ranked(id: &str, artist: &str, score: f64) -> super::RankedWaveTrack {
+    let track = track(id, artist);
+    super::RankedWaveTrack {
+        key: track.provider_key(),
+        artist_id: super::artist_id(&track),
+        track,
+        is_new_artist: false,
+        is_liked_exact: false,
+        bucket: super::WaveBucket::Core,
+        score,
+        reason: WaveReason::TasteMatch,
     }
 }
