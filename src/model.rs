@@ -44,6 +44,15 @@ pub enum PlaybackCapability {
     Unavailable { reason: String },
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepeatMode {
+    #[default]
+    Off,
+    All,
+    One,
+}
+
 impl PlaybackCapability {
     pub const fn can_play(&self) -> bool {
         !matches!(self, Self::Unavailable { .. })

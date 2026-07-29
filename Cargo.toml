@@ -16,6 +16,7 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 directories = "6"
 keyring = "4"
 ratatui = "0.30"
+rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
