@@ -48,7 +48,7 @@ pub(super) async fn import_playlist(
 mod tests {
     use std::{
         io::{Read, Write},
-        net::{TcpListener, TcpStream},
+        net::{Shutdown, TcpListener, TcpStream},
         thread,
     };
 
@@ -91,12 +91,13 @@ mod tests {
             assert!(request.contains("ids=42"));
             r#"[{"id":42,"title":"Раскрытый","permalink_url":"https://soundcloud.com/test/full","user":{"username":"Автор"}}]"#
         };
-        write!(
-            socket,
+        let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
-        )
-        .unwrap();
+        );
+        socket.write_all(response.as_bytes()).unwrap();
+        socket.flush().unwrap();
+        socket.shutdown(Shutdown::Write).unwrap();
     }
 }
