@@ -1,4 +1,5 @@
 mod message;
+mod onboarding;
 mod playback;
 mod providers;
 mod search;
@@ -22,6 +23,7 @@ use crate::{
 };
 
 use message::RuntimeMessage;
+use onboarding::{spawn_soundcloud_probe, spawn_zapret_apply, spawn_zapret_plan};
 use playback::spawn_playback;
 use providers::build_registry;
 use search::spawn_search;
@@ -35,9 +37,11 @@ pub struct Runtime {
     search_task: Option<JoinHandle<()>>,
     playback_task: Option<JoinHandle<()>>,
     wave_task: Option<JoinHandle<()>>,
+    onboarding_task: Option<JoinHandle<()>>,
     search_generation: u64,
     playback_generation: u64,
     wave_generation: u64,
+    onboarding_generation: u64,
     search_delay: Duration,
     last_audio_status: Option<AudioStatus>,
     notices: Vec<String>,
@@ -66,9 +70,11 @@ impl Runtime {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            onboarding_generation: 0,
             search_delay: Duration::from_millis(config.search_debounce_ms),
             last_audio_status: None,
             notices,
@@ -90,6 +96,21 @@ impl Runtime {
                     self.start_search(query, immediate, &mut actions)
                 }
                 AppEffect::GenerateWave => self.start_wave(&mut actions),
+                AppEffect::ProbeSoundCloud => {
+                    self.start_onboarding_task(|sender, generation| {
+                        spawn_soundcloud_probe(sender, generation)
+                    });
+                }
+                AppEffect::PlanZapret(path) => {
+                    self.start_onboarding_task(|sender, generation| {
+                        spawn_zapret_plan(sender, generation, path)
+                    });
+                }
+                AppEffect::ApplyZapret(plan) => {
+                    self.start_onboarding_task(|sender, generation| {
+                        spawn_zapret_apply(sender, generation, *plan)
+                    });
+                }
                 AppEffect::Play(track) => self.start_playback(*track, &mut actions),
                 AppEffect::Pause => {
                     if let Some(audio) = &self.audio {
@@ -165,6 +186,21 @@ impl Runtime {
                     failures,
                 } if generation == self.wave_generation => {
                     actions.push(Action::WaveFinished { tracks, failures });
+                }
+                RuntimeMessage::SoundCloudChecked { generation, access }
+                    if generation == self.onboarding_generation =>
+                {
+                    actions.push(Action::SoundCloudChecked(access));
+                }
+                RuntimeMessage::ZapretPlanned { generation, result }
+                    if generation == self.onboarding_generation =>
+                {
+                    actions.push(Action::ZapretPlanned(result));
+                }
+                RuntimeMessage::ZapretApplied { generation, result }
+                    if generation == self.onboarding_generation =>
+                {
+                    actions.push(Action::ZapretApplied(result));
                 }
                 _ => {}
             }
@@ -290,6 +326,17 @@ impl Runtime {
         self.playback_generation = self.playback_generation.wrapping_add(1);
     }
 
+    fn start_onboarding_task(
+        &mut self,
+        spawn: impl FnOnce(mpsc::UnboundedSender<RuntimeMessage>, u64) -> JoinHandle<()>,
+    ) {
+        if let Some(task) = self.onboarding_task.take() {
+            task.abort();
+        }
+        self.onboarding_generation = self.onboarding_generation.wrapping_add(1);
+        self.onboarding_task = Some(spawn(self.sender.clone(), self.onboarding_generation));
+    }
+
     fn record_current(&mut self, completed: bool, skipped: bool) {
         let Some(track) = self.current_track.take() else {
             return;
@@ -322,6 +369,9 @@ impl Drop for Runtime {
         if let Some(task) = self.playback_task.take() {
             task.abort();
         }
+        if let Some(task) = self.onboarding_task.take() {
+            task.abort();
+        }
     }
 }
 
@@ -340,9 +390,11 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            onboarding_task: None,
             search_generation: 7,
             playback_generation: 3,
             wave_generation: 0,
+            onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,
             notices: Vec::new(),
@@ -371,6 +423,12 @@ mod tests {
                 failures: vec!["старьё".to_string()],
             })
             .unwrap();
+        sender
+            .send(RuntimeMessage::SoundCloudChecked {
+                generation: 1,
+                access: crate::onboarding::SoundCloudAccess::Reachable { status: 200 },
+            })
+            .unwrap();
         assert!(runtime.poll_actions().is_empty());
     }
 
@@ -385,9 +443,11 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            onboarding_generation: 0,
             search_delay: Duration::from_secs(1),
             last_audio_status: None,
             notices: Vec::new(),
@@ -417,9 +477,11 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,
             notices: Vec::new(),
@@ -449,9 +511,11 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,
             notices: Vec::new(),

@@ -1,4 +1,10 @@
-use crate::model::{PlaybackSource, TrackRef};
+use crate::{
+    model::{PlaybackSource, TrackRef},
+    onboarding::{
+        SoundCloudAccess,
+        zapret::{ZapretApplyResult, ZapretPlan},
+    },
+};
 
 pub(super) enum RuntimeMessage {
     SearchFinished {
@@ -19,5 +25,17 @@ pub(super) enum RuntimeMessage {
     PlaybackFailed {
         generation: u64,
         error: String,
+    },
+    SoundCloudChecked {
+        generation: u64,
+        access: SoundCloudAccess,
+    },
+    ZapretPlanned {
+        generation: u64,
+        result: Result<Box<ZapretPlan>, String>,
+    },
+    ZapretApplied {
+        generation: u64,
+        result: Result<ZapretApplyResult, String>,
     },
 }

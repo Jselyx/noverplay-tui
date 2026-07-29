@@ -34,7 +34,7 @@ pub enum OnboardingCommand {
     Finish,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnboardingState {
     pub step: OnboardingStep,
     pub selected: usize,
@@ -46,6 +46,14 @@ pub struct OnboardingState {
     pub soundcloud_problem: Option<String>,
     pub zapret_plan: Option<ZapretPlan>,
     pub zapret_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnboardingResult {
+    pub account_mode: AccountMode,
+    pub soundcloud_enabled: bool,
+    pub yandex_enabled: bool,
+    pub audio_output: Option<String>,
 }
 
 impl OnboardingState {
@@ -186,6 +194,15 @@ impl OnboardingState {
                 self.zapret_error = Some(error);
                 OnboardingCommand::None
             }
+        }
+    }
+
+    pub fn result(&self) -> OnboardingResult {
+        OnboardingResult {
+            account_mode: self.account_mode,
+            soundcloud_enabled: self.soundcloud_enabled,
+            yandex_enabled: self.yandex_enabled,
+            audio_output: self.audio_output.clone(),
         }
     }
 

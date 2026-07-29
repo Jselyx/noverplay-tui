@@ -1,4 +1,12 @@
-use crate::{app::Screen, audio::AudioEvent, model::TrackRef};
+use crate::{
+    app::Screen,
+    audio::AudioEvent,
+    model::TrackRef,
+    onboarding::{
+        SoundCloudAccess,
+        zapret::{ZapretApplyResult, ZapretPlan},
+    },
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
@@ -37,6 +45,14 @@ pub enum Action {
     OpenCommandPalette,
     CloseModal,
     AcceptOnboarding,
+    OnboardingPrevious,
+    OnboardingNext,
+    OnboardingToggle,
+    OnboardingInput(char),
+    OnboardingBackspace,
+    SoundCloudChecked(SoundCloudAccess),
+    ZapretPlanned(Result<Box<ZapretPlan>, String>),
+    ZapretApplied(Result<ZapretApplyResult, String>),
     Tick,
     Resize,
 }

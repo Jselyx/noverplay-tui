@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use noverplay_tui::{
-    app::{App, Modal, Screen},
+    app::{App, Screen},
     cli::{Cli, run_command},
     config::{AppConfig, AppPaths},
     event::EventPump,
@@ -49,15 +49,23 @@ async fn run_tui() -> Result<()> {
         }
         let search_mode = app.screen == Screen::Search && app.modal.is_none();
         let search_has_results = search_mode && !app.search_results.is_empty();
-        let onboarding_open = app.modal == Some(Modal::Onboarding);
+        let onboarding_open = app.onboarding_open();
         let action = events
             .next(search_mode, app.modal.is_some(), search_has_results)
             .await;
         app.handle(action);
         drive_runtime(&mut app, &mut runtime);
-        if onboarding_open && app.modal.is_none() {
+        if onboarding_open && !app.onboarding_open() {
             config.onboarding_completed = true;
-            config.guest_mode = true;
+            if let Some(result) = app.take_onboarding_result() {
+                config.guest_mode = matches!(
+                    result.account_mode,
+                    noverplay_tui::onboarding::AccountMode::Guest
+                );
+                config.soundcloud_enabled = result.soundcloud_enabled;
+                config.yandex_enabled = result.yandex_enabled;
+                config.audio_output = result.audio_output;
+            }
             app.config_dirty = true;
         }
         if app.queue_dirty {

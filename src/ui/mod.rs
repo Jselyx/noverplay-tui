@@ -351,7 +351,7 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &Modal, area: Rect) {
     let popup = centered_rect(64, 60, area);
     frame.render_widget(Clear, popup);
     let (title, body) = match modal {
-        Modal::Onboarding => (
+        Modal::Onboarding(_) => (
             " Быстрая настройка ",
             "Добро пожаловать в Noverplay\n\nEnter  начать настройку\nEsc    продолжить без неё",
         ),

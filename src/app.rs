@@ -5,6 +5,7 @@ use crate::{
     config::AppConfig,
     effect::AppEffect,
     model::{Playlist, RepeatMode, TrackRef},
+    onboarding::{AccountMode, OnboardingCommand, OnboardingResult, OnboardingState},
     storage::{QueueSnapshot, Storage},
 };
 
@@ -96,7 +97,7 @@ impl Default for PlayerState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Modal {
-    Onboarding,
+    Onboarding(Box<OnboardingState>),
     Help,
     CommandPalette,
 }
@@ -121,6 +122,7 @@ pub struct App {
     pub queue_dirty: bool,
     pub config_dirty: bool,
     pub status_message: String,
+    onboarding_result: Option<OnboardingResult>,
     effects: Vec<AppEffect>,
 }
 
@@ -147,12 +149,15 @@ impl App {
                 repeat: queue.repeat,
                 ..PlayerState::default()
             },
-            modal: (!config.onboarding_completed).then_some(Modal::Onboarding),
+            modal: (!config.onboarding_completed).then(|| {
+                Modal::Onboarding(Box::new(OnboardingState::new(config.audio_output.clone())))
+            }),
             should_quit: false,
             dirty: true,
             queue_dirty: false,
             config_dirty: false,
             status_message: "Готово".to_string(),
+            onboarding_result: None,
             effects: Vec::new(),
         })
     }
@@ -285,10 +290,62 @@ impl App {
             }
             Action::OpenHelp => self.modal = Some(Modal::Help),
             Action::OpenCommandPalette => self.modal = Some(Modal::CommandPalette),
-            Action::CloseModal => self.modal = None,
-            Action::AcceptOnboarding => {
-                self.modal = None;
-                self.config_dirty = true;
+            Action::CloseModal => self.close_modal(),
+            Action::AcceptOnboarding => self.update_onboarding(OnboardingState::confirm),
+            Action::OnboardingPrevious => {
+                self.update_onboarding(|state| {
+                    state.select_previous();
+                    OnboardingCommand::None
+                });
+            }
+            Action::OnboardingNext => {
+                self.update_onboarding(|state| {
+                    state.select_next();
+                    OnboardingCommand::None
+                });
+            }
+            Action::OnboardingToggle => {
+                self.update_onboarding(|state| {
+                    state.toggle();
+                    OnboardingCommand::None
+                });
+            }
+            Action::OnboardingInput(value) => {
+                self.update_onboarding(|state| {
+                    state.input(value);
+                    OnboardingCommand::None
+                });
+            }
+            Action::OnboardingBackspace => {
+                self.update_onboarding(|state| {
+                    state.backspace();
+                    OnboardingCommand::None
+                });
+            }
+            Action::SoundCloudChecked(access) => {
+                self.update_onboarding(|state| state.soundcloud_checked(access));
+            }
+            Action::ZapretPlanned(result) => {
+                self.update_onboarding(|state| {
+                    state.zapret_planned(result.map(|plan| *plan));
+                    OnboardingCommand::None
+                });
+            }
+            Action::ZapretApplied(result) => {
+                let status = result.as_ref().ok().map(|result| {
+                    if let Some(backup) = &result.backup_path {
+                        format!(
+                            "Домены добавлены, backup: {}. Перезапусти Zapret вручную",
+                            backup.display()
+                        )
+                    } else {
+                        "Домены добавлены. Перезапусти Zapret вручную".to_string()
+                    }
+                });
+                self.update_onboarding(|state| state.zapret_applied(result.map(|_| ())));
+                if let Some(status) = status {
+                    self.status_message = status;
+                }
             }
             Action::Tick => {}
             Action::Resize => {}
@@ -307,6 +364,14 @@ impl App {
 
     pub fn take_effects(&mut self) -> Vec<AppEffect> {
         std::mem::take(&mut self.effects)
+    }
+
+    pub fn onboarding_open(&self) -> bool {
+        matches!(self.modal, Some(Modal::Onboarding(_)))
+    }
+
+    pub fn take_onboarding_result(&mut self) -> Option<OnboardingResult> {
+        self.onboarding_result.take()
     }
 
     pub fn selected_tracks(&self) -> &[TrackRef] {
@@ -460,6 +525,58 @@ impl App {
             self.effects.push(AppEffect::Play(Box::new(track)));
         }
     }
+
+    fn update_onboarding(
+        &mut self,
+        update: impl FnOnce(&mut OnboardingState) -> OnboardingCommand,
+    ) {
+        let command = match self.modal.as_mut() {
+            Some(Modal::Onboarding(state)) => update(state),
+            _ => return,
+        };
+        self.handle_onboarding_command(command);
+    }
+
+    fn handle_onboarding_command(&mut self, command: OnboardingCommand) {
+        match command {
+            OnboardingCommand::None => {}
+            OnboardingCommand::ProbeSoundCloud => {
+                self.status_message = "Проверяем доступ к SoundCloud".to_string();
+                self.effects.push(AppEffect::ProbeSoundCloud);
+            }
+            OnboardingCommand::StartAccountLogin => {
+                self.status_message =
+                    "Вход в аккаунт продолжится после подключения серверного API".to_string();
+            }
+            OnboardingCommand::PlanZapret(path) => {
+                self.status_message = "Проверяем установку Zapret".to_string();
+                self.effects.push(AppEffect::PlanZapret(path));
+            }
+            OnboardingCommand::ApplyZapret(plan) => {
+                self.status_message = "Добавляем домены в пользовательский список".to_string();
+                self.effects.push(AppEffect::ApplyZapret(plan));
+            }
+            OnboardingCommand::Finish => {
+                if let Some(Modal::Onboarding(state)) = &self.modal {
+                    self.onboarding_result = Some(state.result());
+                }
+                self.modal = None;
+                self.config_dirty = true;
+            }
+        }
+    }
+
+    fn close_modal(&mut self) {
+        if let Some(Modal::Onboarding(state)) = &self.modal {
+            let mut result = state.result();
+            if state.step == crate::onboarding::OnboardingStep::Welcome {
+                result.account_mode = AccountMode::Guest;
+            }
+            self.onboarding_result = Some(result);
+            self.config_dirty = true;
+        }
+        self.modal = None;
+    }
 }
 
 #[cfg(test)]
@@ -510,6 +627,54 @@ mod tests {
                 immediate: true
             }]
         );
+    }
+
+    #[test]
+    fn first_run_checks_soundcloud_and_skips_zapret_when_it_answers() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+
+        app.handle(Action::AcceptOnboarding);
+        app.handle(Action::OnboardingNext);
+        app.handle(Action::AcceptOnboarding);
+        app.handle(Action::OnboardingNext);
+        app.handle(Action::OnboardingNext);
+        app.handle(Action::AcceptOnboarding);
+        app.handle(Action::AcceptOnboarding);
+
+        assert_eq!(app.take_effects(), vec![AppEffect::ProbeSoundCloud]);
+        app.handle(Action::SoundCloudChecked(
+            crate::onboarding::SoundCloudAccess::Reachable { status: 401 },
+        ));
+        assert!(!app.onboarding_open());
+        let result = app.take_onboarding_result().unwrap();
+        assert_eq!(result.account_mode, AccountMode::Guest);
+        assert!(result.soundcloud_enabled);
+    }
+
+    #[test]
+    fn failed_soundcloud_check_keeps_wizard_open_for_zapret_choice() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        if let Some(Modal::Onboarding(state)) = app.modal.as_mut() {
+            state.step = crate::onboarding::OnboardingStep::CheckingSoundCloud;
+        }
+
+        app.handle(Action::SoundCloudChecked(
+            crate::onboarding::SoundCloudAccess::Unreachable {
+                reason: "соединение закрыто".to_string(),
+            },
+        ));
+
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Onboarding(ref state))
+                if state.step == crate::onboarding::OnboardingStep::ZapretChoice
+        ));
     }
 
     #[test]

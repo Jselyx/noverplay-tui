@@ -62,6 +62,11 @@ fn map_key(key: KeyEvent, search_mode: bool, modal_open: bool, search_has_result
         return match key.code {
             KeyCode::Esc => Action::CloseModal,
             KeyCode::Enter => Action::AcceptOnboarding,
+            KeyCode::Up | KeyCode::Char('k') => Action::OnboardingPrevious,
+            KeyCode::Down | KeyCode::Char('j') => Action::OnboardingNext,
+            KeyCode::Char(' ') => Action::OnboardingToggle,
+            KeyCode::Backspace => Action::OnboardingBackspace,
+            KeyCode::Char(value) => Action::OnboardingInput(value),
             _ => Action::Resize,
         };
     }
@@ -123,5 +128,27 @@ mod tests {
     fn command_palette_survives_search_input_mode() {
         let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
         assert_eq!(map_key(key, true, false, false), Action::OpenCommandPalette);
+    }
+
+    #[test]
+    fn onboarding_receives_navigation_and_path_typing() {
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                false,
+                true,
+                false
+            ),
+            Action::OnboardingNext
+        );
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
+                false,
+                true,
+                false
+            ),
+            Action::OnboardingInput('C')
+        );
     }
 }
