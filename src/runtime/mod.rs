@@ -111,6 +111,20 @@ impl Runtime {
                         spawn_zapret_apply(sender, generation, *plan)
                     });
                 }
+                AppEffect::SelectAudioOutput {
+                    output,
+                    volume_percent,
+                } => match AudioEngine::new(output.as_deref(), volume_percent) {
+                    Ok(audio) => {
+                        let name = audio.status().output_name;
+                        self.audio = Some(audio);
+                        self.last_audio_status = None;
+                        actions.push(Action::AudioOutputChanged(Ok(name)));
+                    }
+                    Err(error) => {
+                        actions.push(Action::AudioOutputChanged(Err(error.to_string())));
+                    }
+                },
                 AppEffect::Play(track) => self.start_playback(*track, &mut actions),
                 AppEffect::Pause => {
                     if let Some(audio) = &self.audio {

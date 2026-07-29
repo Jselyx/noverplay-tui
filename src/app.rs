@@ -358,6 +358,12 @@ impl App {
                     self.status_message = status;
                 }
             }
+            Action::AudioOutputChanged(result) => {
+                self.status_message = match result {
+                    Ok(name) => format!("Аудиовыход готов: {name}"),
+                    Err(error) => format!("Аудиовыход не переключился: {error}"),
+                };
+            }
             Action::Tick => {}
             Action::Resize => {}
         }
@@ -553,6 +559,14 @@ impl App {
             OnboardingCommand::None => {}
             OnboardingCommand::ProbeSoundCloud => {
                 self.status_message = "Проверяем доступ к SoundCloud".to_string();
+                let output = match &self.modal {
+                    Some(Modal::Onboarding(state)) => state.audio_output.clone(),
+                    _ => None,
+                };
+                self.effects.push(AppEffect::SelectAudioOutput {
+                    output,
+                    volume_percent: self.player.volume_percent,
+                });
                 self.effects.push(AppEffect::ProbeSoundCloud);
             }
             OnboardingCommand::StartAccountLogin => {
@@ -655,7 +669,16 @@ mod tests {
         app.handle(Action::AcceptOnboarding);
         app.handle(Action::AcceptOnboarding);
 
-        assert_eq!(app.take_effects(), vec![AppEffect::ProbeSoundCloud]);
+        assert_eq!(
+            app.take_effects(),
+            vec![
+                AppEffect::SelectAudioOutput {
+                    output: None,
+                    volume_percent: 75,
+                },
+                AppEffect::ProbeSoundCloud,
+            ]
+        );
         app.handle(Action::SoundCloudChecked(
             crate::onboarding::SoundCloudAccess::Reachable { status: 401 },
         ));

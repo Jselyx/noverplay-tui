@@ -53,6 +53,7 @@ pub enum Action {
     SoundCloudChecked(SoundCloudAccess),
     ZapretPlanned(Result<Box<ZapretPlan>, String>),
     ZapretApplied(Result<ZapretApplyResult, String>),
+    AudioOutputChanged(Result<String, String>),
     Tick,
     Resize,
 }
