@@ -2,7 +2,7 @@ use crate::model::TrackRef;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppEffect {
-    Search(String),
+    Search { query: String, immediate: bool },
     Play(Box<TrackRef>),
     Pause,
     Resume,

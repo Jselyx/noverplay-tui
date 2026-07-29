@@ -73,6 +73,7 @@ pub enum PlaybackStatus {
 pub struct PlayerState {
     pub status: PlaybackStatus,
     pub position_ms: u64,
+    pub buffered_ms: u64,
     pub duration_ms: u64,
     pub volume_percent: u8,
     pub shuffle: bool,
@@ -84,6 +85,7 @@ impl Default for PlayerState {
         Self {
             status: PlaybackStatus::Stopped,
             position_ms: 0,
+            buffered_ms: 0,
             duration_ms: 0,
             volume_percent: 75,
             shuffle: false,
@@ -213,18 +215,42 @@ impl App {
                 self.screen = Screen::Search;
                 self.selected = 0;
             }
-            Action::SearchInput(value) => self.search_query.push(value),
+            Action::SearchInput(value) => {
+                self.search_query.push(value);
+                self.schedule_search(false);
+            }
             Action::SearchBackspace => {
                 self.search_query.pop();
+                self.schedule_search(false);
             }
             Action::SubmitSearch => {
                 self.status_message = if self.search_query.trim().is_empty() {
                     "Введите запрос".to_string()
                 } else {
                     let query = self.search_query.trim().to_string();
-                    self.effects.push(AppEffect::Search(query.clone()));
+                    self.effects.push(AppEffect::Search {
+                        query: query.clone(),
+                        immediate: true,
+                    });
                     format!("Ищем: {query}")
                 };
+            }
+            Action::SearchFinished {
+                query,
+                tracks,
+                failures,
+            } => self.finish_search(query, tracks, failures),
+            Action::AudioProgress {
+                position_ms,
+                buffered_ms,
+            } => {
+                self.player.position_ms = position_ms.min(self.player.duration_ms);
+                self.player.buffered_ms = buffered_ms;
+            }
+            Action::Audio(event) => self.handle_audio_event(event),
+            Action::PlaybackFailed(error) => {
+                self.player.status = PlaybackStatus::Stopped;
+                self.status_message = format!("Не удалось включить трек: {error}");
             }
             Action::OpenHelp => self.modal = Some(Modal::Help),
             Action::OpenCommandPalette => self.modal = Some(Modal::CommandPalette),
@@ -233,16 +259,7 @@ impl App {
                 self.modal = None;
                 self.config_dirty = true;
             }
-            Action::Tick => {
-                if self.player.status == PlaybackStatus::Playing {
-                    self.player.position_ms = self.player.position_ms.saturating_add(1_000);
-                    if self.player.duration_ms > 0
-                        && self.player.position_ms >= self.player.duration_ms
-                    {
-                        self.next_track();
-                    }
-                }
-            }
+            Action::Tick => {}
             Action::Resize => {}
         }
         self.dirty = true;
@@ -277,6 +294,56 @@ impl App {
         }
     }
 
+    fn schedule_search(&mut self, immediate: bool) {
+        let query = self.search_query.trim().to_string();
+        if query.is_empty() {
+            self.search_results.clear();
+            self.selected = 0;
+            self.status_message = "Введите запрос".to_string();
+        }
+        self.effects.push(AppEffect::Search { query, immediate });
+    }
+
+    fn finish_search(&mut self, query: String, tracks: Vec<TrackRef>, failures: Vec<String>) {
+        if self.search_query.trim() != query {
+            return;
+        }
+        self.search_results = tracks;
+        self.selected = 0;
+        self.status_message = if self.search_results.is_empty() && !failures.is_empty() {
+            failures.join("; ")
+        } else if failures.is_empty() {
+            format!("Найдено: {}", self.search_results.len())
+        } else {
+            format!(
+                "Найдено: {}, часть сервисов прилегла: {}",
+                self.search_results.len(),
+                failures.join(", ")
+            )
+        };
+    }
+
+    fn handle_audio_event(&mut self, event: crate::audio::AudioEvent) {
+        match event {
+            crate::audio::AudioEvent::Buffering => {
+                self.player.status = PlaybackStatus::Buffering;
+                self.status_message = "Буферизация".to_string();
+            }
+            crate::audio::AudioEvent::Playing => {
+                self.player.status = PlaybackStatus::Playing;
+                self.status_message = "Воспроизведение".to_string();
+            }
+            crate::audio::AudioEvent::Paused => self.player.status = PlaybackStatus::Paused,
+            crate::audio::AudioEvent::Stopped => self.player.status = PlaybackStatus::Stopped,
+            crate::audio::AudioEvent::Ended => self.next_track(),
+            crate::audio::AudioEvent::Failed(error)
+            | crate::audio::AudioEvent::OutputFailed(error) => {
+                self.player.status = PlaybackStatus::Stopped;
+                self.status_message = format!("Аудио сломалось: {error}");
+            }
+        }
+    }
+
     fn activate_selected(&mut self) {
         let Some(track) = self.selected_tracks().get(self.selected).cloned() else {
             return;
@@ -293,6 +360,7 @@ impl App {
         }
         self.now_playing = Some(track.clone());
         self.player.position_ms = 0;
+        self.player.buffered_ms = 0;
         self.player.duration_ms = track.duration_ms.unwrap_or_default();
         self.player.status = PlaybackStatus::Buffering;
         self.queue_dirty = true;
@@ -344,6 +412,7 @@ impl App {
         self.queue_index = Some(index);
         self.now_playing = self.queue.get(index).cloned();
         self.player.position_ms = 0;
+        self.player.buffered_ms = 0;
         self.player.duration_ms = self
             .now_playing
             .as_ref()
@@ -400,8 +469,49 @@ mod tests {
         app.handle(Action::SubmitSearch);
         assert_eq!(
             app.take_effects(),
-            vec![AppEffect::Search("winter mix".to_string())]
+            vec![AppEffect::Search {
+                query: "winter mix".to_string(),
+                immediate: true
+            }]
         );
+    }
+
+    #[test]
+    fn stale_search_result_goes_away_without_a_speech() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        app.search_query = "новый запрос".to_string();
+        app.handle(Action::SearchFinished {
+            query: "старый запрос".to_string(),
+            tracks: vec![test_track()],
+            failures: Vec::new(),
+        });
+        assert!(app.search_results.is_empty());
+    }
+
+    #[test]
+    fn ended_audio_moves_queue_forward() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        app.queue = vec![
+            test_track(),
+            TrackRef {
+                id: "43".to_string(),
+                ..test_track()
+            },
+        ];
+        app.queue_index = Some(0);
+        app.now_playing = app.queue.first().cloned();
+        app.handle(Action::Audio(crate::audio::AudioEvent::Ended));
+        assert_eq!(app.queue_index, Some(1));
+        assert!(matches!(
+            app.take_effects().as_slice(),
+            [AppEffect::Play(_)]
+        ));
     }
 
     fn test_track() -> TrackRef {

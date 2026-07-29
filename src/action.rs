@@ -1,4 +1,4 @@
-use crate::app::Screen;
+use crate::{app::Screen, audio::AudioEvent, model::TrackRef};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
@@ -18,6 +18,17 @@ pub enum Action {
     SearchInput(char),
     SearchBackspace,
     SubmitSearch,
+    SearchFinished {
+        query: String,
+        tracks: Vec<TrackRef>,
+        failures: Vec<String>,
+    },
+    AudioProgress {
+        position_ms: u64,
+        buffered_ms: u64,
+    },
+    Audio(AudioEvent),
+    PlaybackFailed(String),
     OpenHelp,
     OpenCommandPalette,
     CloseModal,
