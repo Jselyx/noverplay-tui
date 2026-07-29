@@ -1,7 +1,11 @@
 mod client;
 mod mapping;
+mod playlist;
+mod playlist_tracks;
 mod playlist_url;
 mod search;
+mod user;
+mod uuid_playlist;
 
 use std::sync::Arc;
 
@@ -16,6 +20,7 @@ use crate::{
 };
 
 use client::build_client;
+use playlist::import_playlist;
 use search::search_tracks;
 
 pub use mapping::normalizovat_track;
@@ -50,8 +55,8 @@ impl MusicProvider for YandexProvider {
         search_tracks(&self.client, query, cursor).await
     }
 
-    async fn import_playlist(&self, _url: &Url) -> Result<ImportedPlaylist> {
-        bail!("импорт Yandex Music еще не подключен")
+    async fn import_playlist(&self, url: &Url) -> Result<ImportedPlaylist> {
+        import_playlist(&self.client, url).await
     }
 
     async fn related(&self, _track: &TrackRef, _limit: usize) -> Result<Vec<TrackRef>> {
