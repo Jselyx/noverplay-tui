@@ -1,6 +1,8 @@
+mod apply;
 mod layout;
 mod plan;
 
+pub use apply::{ZapretApplyResult, apply_plan, sudo_command};
 pub use layout::{ZapretInstall, ZapretKind, standard_linux_install};
 pub use plan::ZapretPlan;
 
