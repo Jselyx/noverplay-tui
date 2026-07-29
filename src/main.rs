@@ -1,7 +1,8 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use noverplay_tui::{
     app::{App, Modal, Screen},
+    cli::{Cli, run_command},
     config::{AppConfig, AppPaths},
     event::EventPump,
     runtime::Runtime,
@@ -11,28 +12,11 @@ use noverplay_tui::{
     ui,
 };
 
-#[derive(Debug, Parser)]
-#[command(name = "noverplay", version, about = "Noverplay в терминале")]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    SetupZapret {
-        #[arg(long)]
-        path: std::path::PathBuf,
-    },
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Some(Command::SetupZapret { path }) => {
-            println!("Путь к Zapret: {}", path.display());
-        }
+        Some(command) => run_command(command)?,
         None => {
             run_tui().await?;
         }
