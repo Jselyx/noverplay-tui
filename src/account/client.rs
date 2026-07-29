@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn query_is_signed_exactly_as_it_goes_over_http() {
-        let url = Url::parse("https://api.noverplay.ru/api/auth/captcha?action=login").unwrap();
+        let url = Url::parse("https://api.noverplay.space/api/auth/captcha?action=login").unwrap();
         assert_eq!(path_query(&url), "/api/auth/captcha?action=login");
     }
 

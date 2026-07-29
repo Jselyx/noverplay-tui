@@ -67,7 +67,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            server_url: "https://api.noverplay.ru".to_string(),
+            server_url: "https://api.noverplay.space".to_string(),
             theme: "cyan".to_string(),
             language: "ru".to_string(),
             audio_output: None,
@@ -109,6 +109,13 @@ impl AppConfig {
         self.search_debounce_ms = self.search_debounce_ms.clamp(100, 2_000);
         self.frame_limit = self.frame_limit.clamp(10, 60);
         self.server_url = self.server_url.trim_end_matches('/').to_string();
+        if matches!(
+            self.server_url.as_str(),
+            "https://api.noverplay.ru" | "http://api.noverplay.ru"
+        ) {
+            // старый домен умер даже не родившись, тащить его дальше было бы некромантией для бедных
+            self.server_url = "https://api.noverplay.space".to_string();
+        }
         self.soundcloud_client_id_override = self
             .soundcloud_client_id_override
             .map(|value| value.trim().to_string())
@@ -152,5 +159,15 @@ mod tests {
         assert_eq!(config.volume_percent, 100);
         assert_eq!(config.frame_limit, 60);
         assert_eq!(config.search_debounce_ms, 100);
+    }
+
+    #[test]
+    fn dead_server_domain_is_moved_to_the_real_one() {
+        let config = AppConfig {
+            server_url: "https://api.noverplay.ru/".to_string(),
+            ..AppConfig::default()
+        }
+        .normalized();
+        assert_eq!(config.server_url, "https://api.noverplay.space");
     }
 }
