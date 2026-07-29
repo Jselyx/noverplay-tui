@@ -84,14 +84,9 @@ pub struct ScCollection<T> {
     pub next_href: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct ScStreams {
-    pub hls_aac_160_url: Option<String>,
-    pub hls_aac_96_url: Option<String>,
-    pub preview_mp3_128_url: Option<String>,
-    pub http_mp3_128_url: Option<String>,
-    pub hls_mp3_128_url: Option<String>,
-    pub hls_opus_64_url: Option<String>,
+#[derive(Clone, Debug, Deserialize)]
+pub struct ScResolvedStream {
+    pub url: String,
 }
 
 fn string_id<'de, D>(deserializer: D) -> Result<String, D::Error>

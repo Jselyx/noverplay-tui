@@ -24,7 +24,7 @@ use related::related_tracks;
 use search::search_tracks;
 
 pub use mapping::normalizovat_track;
-pub use models::{ScCollection, ScPlaylist, ScStreams, ScTrack};
+pub use models::{ScCollection, ScPlaylist, ScTrack};
 pub use source_url::proverit_soundcloud_url;
 
 pub struct SoundCloudProvider {
