@@ -61,12 +61,12 @@ fn map_key(key: KeyEvent, search_mode: bool, modal_open: bool, search_has_result
     if modal_open {
         return match key.code {
             KeyCode::Esc => Action::CloseModal,
-            KeyCode::Enter => Action::AcceptOnboarding,
-            KeyCode::Up | KeyCode::Char('k') => Action::OnboardingPrevious,
-            KeyCode::Down | KeyCode::Char('j') => Action::OnboardingNext,
-            KeyCode::Char(' ') => Action::OnboardingToggle,
-            KeyCode::Backspace => Action::OnboardingBackspace,
-            KeyCode::Char(value) => Action::OnboardingInput(value),
+            KeyCode::Enter => Action::ModalSubmit,
+            KeyCode::Up | KeyCode::Char('k') => Action::ModalPrevious,
+            KeyCode::Down | KeyCode::Char('j') => Action::ModalNext,
+            KeyCode::Char(' ') => Action::ModalToggle,
+            KeyCode::Backspace => Action::ModalBackspace,
+            KeyCode::Char(value) => Action::ModalInput(value),
             _ => Action::Resize,
         };
     }
@@ -139,7 +139,7 @@ mod tests {
                 true,
                 false
             ),
-            Action::OnboardingNext
+            Action::ModalNext
         );
         assert_eq!(
             map_key(
@@ -148,7 +148,7 @@ mod tests {
                 true,
                 false
             ),
-            Action::OnboardingInput('C')
+            Action::ModalInput('C')
         );
     }
 }

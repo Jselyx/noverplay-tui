@@ -29,6 +29,14 @@ async fn run_tui() -> Result<()> {
     let paths = AppPaths::discover()?;
     paths.ensure()?;
     let mut config = AppConfig::load(&paths)?.normalized();
+    let secrets = SecretStore::new(paths.secrets_file.clone());
+    if let Some(client_id) = config.soundcloud_client_id_override.take() {
+        secrets.set(
+            noverplay_tui::secrets::SecretKey::SoundCloudClientId,
+            &client_id,
+        )?;
+        config.save(&paths)?;
+    }
     let storage = Storage::new(paths.database_file.clone());
     storage.initialize()?;
     let audio_outputs = if config.onboarding_completed {
@@ -37,8 +45,11 @@ async fn run_tui() -> Result<()> {
         AudioEngine::output_devices().unwrap_or_default()
     };
     let mut app = App::load_with_audio_outputs(&storage, &config, audio_outputs)?;
-    let secrets = SecretStore::new(paths.secrets_file.clone());
     let mut runtime = Runtime::new(&config, &secrets, storage.clone());
+    match runtime.credential_state() {
+        Ok(credentials) => app.set_credentials(credentials),
+        Err(error) => app.status_message = format!("Не удалось проверить ключи: {error}"),
+    }
     if let Some(notice) = runtime.take_notices().into_iter().last() {
         app.status_message = notice;
     }
@@ -80,6 +91,8 @@ async fn run_tui() -> Result<()> {
         }
         if app.config_dirty {
             config.volume_percent = app.player.volume_percent;
+            config.soundcloud_enabled = app.soundcloud_enabled;
+            config.yandex_enabled = app.yandex_enabled;
             config.save(&paths)?;
             app.config_dirty = false;
         }

@@ -1,3 +1,4 @@
+mod credential;
 mod onboarding;
 
 use ratatui::{
@@ -28,7 +29,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     draw_main(frame, app, vertical[0]);
     draw_player(frame, app, vertical[1]);
     if let Some(modal) = &app.modal {
-        draw_modal(frame, modal, area);
+        draw_modal(frame, app, modal, area);
     }
 }
 
@@ -240,40 +241,29 @@ fn draw_profile(frame: &mut Frame<'_>, area: Rect) {
 }
 
 fn draw_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled(" Громкость      ", Style::new().fg(MUTED)),
-                Span::styled(
-                    format!("{}%", app.player.volume_percent),
-                    Style::new().fg(Color::White),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled(" Перемешивание ", Style::new().fg(MUTED)),
-                Span::styled(
-                    if app.player.shuffle {
-                        "включено"
-                    } else {
-                        "выключено"
-                    },
-                    Style::new().fg(Color::White),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled(" Повтор         ", Style::new().fg(MUTED)),
-                Span::styled(
-                    repeat_label(app.player.repeat),
-                    Style::new().fg(Color::White),
-                ),
-            ]),
-            Line::from(""),
-            Line::styled(
-                " +/- громкость  ·  s перемешивание  ·  r повтор",
-                Style::new().fg(PRIMARY),
-            ),
-        ]),
+    let items = crate::credentials::CredentialKind::ALL
+        .iter()
+        .map(|kind| {
+            let configured = app.credentials.is_configured(*kind);
+            ListItem::new(format!(
+                "  {:<24}  {}",
+                kind.label(),
+                if configured {
+                    "настроен"
+                } else {
+                    "не настроен"
+                }
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut state = ListState::default().with_selected(Some(app.selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(Block::new().title(" Сервисы  Enter изменить "))
+            .highlight_symbol(" ▸ ")
+            .highlight_style(Style::new().fg(Color::Black).bg(Color::White)),
         area,
+        &mut state,
     );
 }
 
@@ -349,15 +339,20 @@ fn draw_player(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
-fn draw_modal(frame: &mut Frame<'_>, modal: &Modal, area: Rect) {
+fn draw_modal(frame: &mut Frame<'_>, app: &App, modal: &Modal, area: Rect) {
     if let Modal::Onboarding(state) = modal {
         onboarding::draw(frame, state, area);
+        return;
+    }
+    if let Modal::Credential(editor) = modal {
+        credential::draw(frame, editor, app.credentials, area);
         return;
     }
     let popup = centered_rect(64, 60, area);
     frame.render_widget(Clear, popup);
     let (title, body) = match modal {
         Modal::Onboarding(_) => unreachable!(),
+        Modal::Credential(_) => unreachable!(),
         Modal::Help => (
             " Клавиши ",
             "1-8 разделы    / поиск\n↑↓ или jk выбор   Enter открыть\nSpace пауза       n/p следующий/предыдущий\n←→ или hl ±10 сек  +/- громкость\ns перемешивание   r повтор\nq выход           Esc закрыть",
@@ -462,7 +457,7 @@ mod tests {
         let storage = Storage::new(temp.path().join("db.sqlite3"));
         storage.initialize().unwrap();
         let mut app = App::load(&storage, &AppConfig::default()).unwrap();
-        app.handle(crate::action::Action::AcceptOnboarding);
+        app.handle(crate::action::Action::ModalSubmit);
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
@@ -519,5 +514,26 @@ mod tests {
                 Color::Reset | Color::Black | Color::White | Color::Gray | Color::DarkGray
             )
         }));
+    }
+
+    #[test]
+    fn credential_editor_masks_the_value() {
+        let (_temp, mut app) = app();
+        app.screen = Screen::Settings;
+        app.modal = Some(Modal::Credential(Box::new(
+            crate::credentials::CredentialEditor {
+                kind: crate::credentials::CredentialKind::SoundCloudClientId,
+                value: "super-secret-client-id".to_string(),
+                saving: false,
+            },
+        )));
+        let backend = TestBackend::new(100, 28);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+
+        let content = terminal.backend().to_string();
+        assert!(content.contains("SoundCloud client_id"));
+        assert!(!content.contains("super-secret-client-id"));
     }
 }

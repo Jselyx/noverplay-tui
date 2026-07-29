@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{model::TrackRef, onboarding::zapret::ZapretPlan};
+use crate::{credentials::CredentialKind, model::TrackRef, onboarding::zapret::ZapretPlan};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppEffect {
@@ -9,6 +9,10 @@ pub enum AppEffect {
         immediate: bool,
     },
     GenerateWave,
+    SaveCredential {
+        kind: CredentialKind,
+        value: String,
+    },
     ProbeSoundCloud,
     PlanZapret(PathBuf),
     ApplyZapret(Box<ZapretPlan>),

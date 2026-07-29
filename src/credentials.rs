@@ -32,6 +32,35 @@ pub struct CredentialState {
     pub yandex: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CredentialEditor {
+    pub kind: CredentialKind,
+    pub value: String,
+    pub saving: bool,
+}
+
+impl CredentialEditor {
+    pub fn new(kind: CredentialKind) -> Self {
+        Self {
+            kind,
+            value: String::new(),
+            saving: false,
+        }
+    }
+
+    pub fn input(&mut self, value: char) {
+        if !self.saving && !value.is_control() && self.value.chars().count() < 512 {
+            self.value.push(value);
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if !self.saving {
+            self.value.pop();
+        }
+    }
+}
+
 impl CredentialState {
     pub fn load(secrets: &SecretStore) -> Result<Self> {
         Ok(Self {
@@ -77,5 +106,18 @@ mod tests {
 
         assert!(state.soundcloud);
         assert!(!state.yandex);
+    }
+
+    #[test]
+    fn editor_hides_from_control_characters_and_runaway_paste() {
+        let mut editor = CredentialEditor::new(CredentialKind::YandexToken);
+        editor.input('\n');
+        for _ in 0..600 {
+            editor.input('x');
+        }
+
+        assert_eq!(editor.value.len(), 512);
+        editor.backspace();
+        assert_eq!(editor.value.len(), 511);
     }
 }

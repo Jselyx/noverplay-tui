@@ -16,6 +16,7 @@ use crate::{
     action::Action,
     audio::{AudioEngine, AudioStatus},
     config::AppConfig,
+    credentials::{CredentialKind, CredentialState},
     effect::AppEffect,
     provider::ProviderRegistry,
     secrets::SecretStore,
@@ -31,6 +32,8 @@ use wave::spawn_wave;
 
 pub struct Runtime {
     providers: Arc<ProviderRegistry>,
+    config: AppConfig,
+    secrets: SecretStore,
     audio: Option<AudioEngine>,
     sender: mpsc::UnboundedSender<RuntimeMessage>,
     receiver: mpsc::UnboundedReceiver<RuntimeMessage>,
@@ -64,6 +67,8 @@ impl Runtime {
         let (sender, receiver) = mpsc::unbounded_channel();
         Self {
             providers: Arc::new(setup.registry),
+            config: config.clone(),
+            secrets: secrets.clone(),
             audio,
             sender,
             receiver,
@@ -96,6 +101,12 @@ impl Runtime {
                     self.start_search(query, immediate, &mut actions)
                 }
                 AppEffect::GenerateWave => self.start_wave(&mut actions),
+                AppEffect::SaveCredential { kind, value } => {
+                    actions.push(Action::CredentialSaved {
+                        kind,
+                        result: self.save_credential(kind, &value),
+                    });
+                }
                 AppEffect::ProbeSoundCloud => {
                     self.start_onboarding_task(|sender, generation| {
                         spawn_soundcloud_probe(sender, generation)
@@ -245,6 +256,31 @@ impl Runtime {
             actions.push(Action::Audio(event));
         }
         actions
+    }
+
+    pub fn credential_state(&self) -> anyhow::Result<CredentialState> {
+        CredentialState::load(&self.secrets)
+    }
+
+    fn save_credential(&mut self, kind: CredentialKind, value: &str) -> Result<(), String> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err("ключ пустой".to_string());
+        }
+        self.secrets
+            .set(kind.secret_key(), value)
+            .map_err(|error| error.to_string())?;
+        match kind {
+            CredentialKind::SoundCloudClientId => {
+                self.config.soundcloud_enabled = true;
+                self.config.soundcloud_client_id_override = None;
+            }
+            CredentialKind::YandexToken => self.config.yandex_enabled = true,
+        }
+        let setup = build_registry(&self.config, &self.secrets);
+        self.providers = Arc::new(setup.registry);
+        self.notices.extend(setup.notices);
+        Ok(())
     }
 
     fn start_search(&mut self, query: String, immediate: bool, actions: &mut Vec<Action>) {
@@ -398,6 +434,8 @@ mod tests {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut runtime = Runtime {
             providers: Arc::new(ProviderRegistry::default()),
+            config: AppConfig::default(),
+            secrets: SecretStore::new(std::path::PathBuf::from("unused-secrets.json")),
             audio: None,
             sender: sender.clone(),
             receiver,
@@ -451,6 +489,8 @@ mod tests {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut runtime = Runtime {
             providers: Arc::new(ProviderRegistry::default()),
+            config: AppConfig::default(),
+            secrets: SecretStore::new(std::path::PathBuf::from("unused-secrets.json")),
             audio: None,
             sender,
             receiver,
@@ -481,10 +521,59 @@ mod tests {
     }
 
     #[test]
+    fn saved_credential_rebuilds_provider_without_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let mut runtime = Runtime {
+            providers: Arc::new(ProviderRegistry::default()),
+            config: AppConfig::default(),
+            secrets: SecretStore::file_only(temp.path().join("secrets.json")),
+            audio: None,
+            sender,
+            receiver,
+            search_task: None,
+            playback_task: None,
+            wave_task: None,
+            onboarding_task: None,
+            search_generation: 0,
+            playback_generation: 0,
+            wave_generation: 0,
+            onboarding_generation: 0,
+            search_delay: Duration::ZERO,
+            last_audio_status: None,
+            notices: Vec::new(),
+            storage: Storage::new(std::path::PathBuf::from("unused.sqlite3")),
+            current_track: None,
+            current_track_started: false,
+        };
+
+        let actions = runtime.dispatch(vec![AppEffect::SaveCredential {
+            kind: CredentialKind::SoundCloudClientId,
+            value: "client-id".to_string(),
+        }]);
+
+        assert!(matches!(
+            actions.as_slice(),
+            [Action::CredentialSaved {
+                kind: CredentialKind::SoundCloudClientId,
+                result: Ok(())
+            }]
+        ));
+        assert!(
+            runtime
+                .providers
+                .get(crate::model::ProviderKind::SoundCloud)
+                .is_some()
+        );
+    }
+
+    #[test]
     fn wave_without_configured_provider_finishes_instead_of_hanging() {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut runtime = Runtime {
             providers: Arc::new(ProviderRegistry::default()),
+            config: AppConfig::default(),
+            secrets: SecretStore::new(std::path::PathBuf::from("unused-secrets.json")),
             audio: None,
             sender,
             receiver,
@@ -519,6 +608,8 @@ mod tests {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut runtime = Runtime {
             providers: Arc::new(ProviderRegistry::default()),
+            config: AppConfig::default(),
+            secrets: SecretStore::new(std::path::PathBuf::from("unused-secrets.json")),
             audio: None,
             sender,
             receiver,

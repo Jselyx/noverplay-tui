@@ -3,6 +3,7 @@ use anyhow::Result;
 use crate::{
     action::Action,
     config::AppConfig,
+    credentials::{CredentialEditor, CredentialKind, CredentialState},
     effect::AppEffect,
     model::{Playlist, RepeatMode, TrackRef},
     onboarding::{AccountMode, OnboardingCommand, OnboardingResult, OnboardingState},
@@ -98,6 +99,7 @@ impl Default for PlayerState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Modal {
     Onboarding(Box<OnboardingState>),
+    Credential(Box<CredentialEditor>),
     Help,
     CommandPalette,
 }
@@ -116,6 +118,9 @@ pub struct App {
     pub queue_index: Option<usize>,
     pub now_playing: Option<TrackRef>,
     pub player: PlayerState,
+    pub credentials: CredentialState,
+    pub soundcloud_enabled: bool,
+    pub yandex_enabled: bool,
     pub modal: Option<Modal>,
     pub should_quit: bool,
     pub dirty: bool,
@@ -157,6 +162,9 @@ impl App {
                 repeat: queue.repeat,
                 ..PlayerState::default()
             },
+            credentials: CredentialState::default(),
+            soundcloud_enabled: config.soundcloud_enabled,
+            yandex_enabled: config.yandex_enabled,
             modal: (!config.onboarding_completed).then(|| {
                 Modal::Onboarding(Box::new(OnboardingState::with_audio_outputs(
                     config.audio_output.clone(),
@@ -302,37 +310,13 @@ impl App {
             Action::OpenHelp => self.modal = Some(Modal::Help),
             Action::OpenCommandPalette => self.modal = Some(Modal::CommandPalette),
             Action::CloseModal => self.close_modal(),
-            Action::AcceptOnboarding => self.update_onboarding(OnboardingState::confirm),
-            Action::OnboardingPrevious => {
-                self.update_onboarding(|state| {
-                    state.select_previous();
-                    OnboardingCommand::None
-                });
-            }
-            Action::OnboardingNext => {
-                self.update_onboarding(|state| {
-                    state.select_next();
-                    OnboardingCommand::None
-                });
-            }
-            Action::OnboardingToggle => {
-                self.update_onboarding(|state| {
-                    state.toggle();
-                    OnboardingCommand::None
-                });
-            }
-            Action::OnboardingInput(value) => {
-                self.update_onboarding(|state| {
-                    state.input(value);
-                    OnboardingCommand::None
-                });
-            }
-            Action::OnboardingBackspace => {
-                self.update_onboarding(|state| {
-                    state.backspace();
-                    OnboardingCommand::None
-                });
-            }
+            Action::ModalSubmit => self.submit_modal(),
+            Action::ModalPrevious => self.move_modal_selection(false),
+            Action::ModalNext => self.move_modal_selection(true),
+            Action::ModalToggle => self.toggle_modal(),
+            Action::ModalInput(value) => self.input_modal(value),
+            Action::ModalBackspace => self.backspace_modal(),
+            Action::CredentialSaved { kind, result } => self.finish_credential_save(kind, result),
             Action::SoundCloudChecked(access) => {
                 self.update_onboarding(|state| state.soundcloud_checked(access));
             }
@@ -391,6 +375,11 @@ impl App {
         self.onboarding_result.take()
     }
 
+    pub fn set_credentials(&mut self, credentials: CredentialState) {
+        self.credentials = credentials;
+        self.dirty = true;
+    }
+
     pub fn selected_tracks(&self) -> &[TrackRef] {
         match self.screen {
             Screen::Search => &self.search_results,
@@ -404,6 +393,7 @@ impl App {
     fn item_count(&self) -> usize {
         match self.screen {
             Screen::Playlists => self.playlists.len(),
+            Screen::Settings => CredentialKind::ALL.len(),
             _ => self.selected_tracks().len(),
         }
     }
@@ -463,6 +453,13 @@ impl App {
     }
 
     fn activate_selected(&mut self) {
+        if self.screen == Screen::Settings {
+            if let Some(kind) = CredentialKind::ALL.get(self.selected).copied() {
+                self.modal = Some(Modal::Credential(Box::new(CredentialEditor::new(kind))));
+                self.status_message = format!("Введи новый {}", kind.label());
+            }
+            return;
+        }
         let Some(track) = self.selected_tracks().get(self.selected).cloned() else {
             return;
         };
@@ -552,6 +549,82 @@ impl App {
             _ => return,
         };
         self.handle_onboarding_command(command);
+    }
+
+    fn submit_modal(&mut self) {
+        match self.modal.as_mut() {
+            Some(Modal::Onboarding(_)) => self.update_onboarding(OnboardingState::confirm),
+            Some(Modal::Credential(editor)) => {
+                let value = editor.value.trim().to_string();
+                if value.is_empty() {
+                    self.status_message =
+                        "Пустой ключ сохранять не будем, цирк уже занят".to_string();
+                    return;
+                }
+                editor.saving = true;
+                self.status_message = format!("Сохраняем {}", editor.kind.label());
+                self.effects.push(AppEffect::SaveCredential {
+                    kind: editor.kind,
+                    value,
+                });
+            }
+            _ => self.close_modal(),
+        }
+    }
+
+    fn move_modal_selection(&mut self, next: bool) {
+        self.update_onboarding(|state| {
+            if next {
+                state.select_next();
+            } else {
+                state.select_previous();
+            }
+            OnboardingCommand::None
+        });
+    }
+
+    fn toggle_modal(&mut self) {
+        self.update_onboarding(|state| {
+            state.toggle();
+            OnboardingCommand::None
+        });
+    }
+
+    fn input_modal(&mut self, value: char) {
+        match self.modal.as_mut() {
+            Some(Modal::Onboarding(state)) => state.input(value),
+            Some(Modal::Credential(editor)) => editor.input(value),
+            _ => {}
+        }
+    }
+
+    fn backspace_modal(&mut self) {
+        match self.modal.as_mut() {
+            Some(Modal::Onboarding(state)) => state.backspace(),
+            Some(Modal::Credential(editor)) => editor.backspace(),
+            _ => {}
+        }
+    }
+
+    fn finish_credential_save(&mut self, kind: CredentialKind, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                self.credentials.set_configured(kind, true);
+                match kind {
+                    CredentialKind::SoundCloudClientId => self.soundcloud_enabled = true,
+                    CredentialKind::YandexToken => self.yandex_enabled = true,
+                }
+                self.config_dirty = true;
+                self.modal = None;
+                self.status_message = format!("{} сохранён, сервис уже перезапущен", kind.label());
+            }
+            Err(error) => {
+                if let Some(Modal::Credential(editor)) = self.modal.as_mut() {
+                    editor.saving = false;
+                }
+                self.status_message = format!("Не удалось сохранить {}: {error}", kind.label());
+            }
+        }
     }
 
     fn handle_onboarding_command(&mut self, command: OnboardingCommand) {
@@ -655,19 +728,48 @@ mod tests {
     }
 
     #[test]
+    fn settings_editor_emits_secret_save_without_putting_value_in_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(
+            &storage,
+            &AppConfig {
+                onboarding_completed: true,
+                ..AppConfig::default()
+            },
+        )
+        .unwrap();
+        app.handle(Action::Navigate(Screen::Settings));
+        app.handle(Action::Activate);
+        for value in "client-id".chars() {
+            app.handle(Action::ModalInput(value));
+        }
+        app.handle(Action::ModalSubmit);
+
+        assert_eq!(
+            app.take_effects(),
+            vec![AppEffect::SaveCredential {
+                kind: CredentialKind::SoundCloudClientId,
+                value: "client-id".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn first_run_checks_soundcloud_and_skips_zapret_when_it_answers() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::new(temp.path().join("db.sqlite3"));
         storage.initialize().unwrap();
         let mut app = App::load(&storage, &AppConfig::default()).unwrap();
 
-        app.handle(Action::AcceptOnboarding);
-        app.handle(Action::OnboardingNext);
-        app.handle(Action::AcceptOnboarding);
-        app.handle(Action::OnboardingNext);
-        app.handle(Action::OnboardingNext);
-        app.handle(Action::AcceptOnboarding);
-        app.handle(Action::AcceptOnboarding);
+        app.handle(Action::ModalSubmit);
+        app.handle(Action::ModalNext);
+        app.handle(Action::ModalSubmit);
+        app.handle(Action::ModalNext);
+        app.handle(Action::ModalNext);
+        app.handle(Action::ModalSubmit);
+        app.handle(Action::ModalSubmit);
 
         assert_eq!(
             app.take_effects(),
