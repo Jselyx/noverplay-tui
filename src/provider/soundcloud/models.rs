@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct ScUser {
     #[serde(default)]
     pub username: String,
@@ -55,6 +55,7 @@ pub struct ScTrack {
     pub streamable: Option<bool>,
     #[serde(default)]
     pub media: ScMedia,
+    #[serde(default)]
     pub user: ScUser,
 }
 
@@ -62,6 +63,8 @@ pub struct ScTrack {
 pub struct ScPlaylist {
     #[serde(deserialize_with = "string_id")]
     pub id: String,
+    #[serde(default)]
+    pub kind: String,
     #[serde(default)]
     pub title: String,
     #[serde(default)]

@@ -3,7 +3,7 @@ use url::Url;
 
 use crate::model::{PlaybackCapability, ProviderKind};
 
-use super::{ScTrack, normalizovat_track, proverit_soundcloud_url};
+use super::{ScPlaylist, ScTrack, normalizovat_track, proverit_soundcloud_url};
 
 #[test]
 fn numeric_id_is_not_lost_in_json() {
@@ -42,6 +42,20 @@ fn blocked_track_stays_metadata_only() {
         normalizovat_track(track).unwrap().capability,
         PlaybackCapability::Unavailable { .. }
     ));
+}
+
+#[test]
+fn partial_playlist_track_survives_json() {
+    let playlist: ScPlaylist = serde_json::from_value(json!({
+        "id": 7,
+        "kind": "playlist",
+        "title": "Набор",
+        "tracks": [{"id": 42}]
+    }))
+    .unwrap();
+    assert_eq!(playlist.kind, "playlist");
+    assert_eq!(playlist.tracks[0].id, "42");
+    assert!(playlist.tracks[0].user.username.is_empty());
 }
 
 #[test]
