@@ -4,7 +4,7 @@ use yandex_music::model::track::Track;
 
 use crate::model::{PlaybackCapability, ProviderKind};
 
-use super::{YandexPlaylistRef, normalizovat_track, parse_playlist_url};
+use super::{YandexPlaylistRef, parse_playlist_url, normalizovat_track};
 
 #[test]
 fn numeric_playlist_url_is_parsed() {

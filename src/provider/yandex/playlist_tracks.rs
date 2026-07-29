@@ -15,7 +15,9 @@ pub(super) async fn zagruzit_treki_pleilista(
         return Ok(Vec::new());
     };
     match tracks {
-        PlaylistTracks::Full(tracks) => Ok(tracks.into_iter().filter_map(normalizovat_track).collect()),
+        PlaylistTracks::Full(tracks) => {
+            Ok(tracks.into_iter().filter_map(normalizovat_track).collect())
+        }
         PlaylistTracks::WithInfo(tracks) => Ok(tracks
             .into_iter()
             .filter_map(|entry| normalizovat_track(entry.track))

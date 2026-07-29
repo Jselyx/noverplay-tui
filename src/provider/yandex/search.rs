@@ -33,7 +33,11 @@ pub(super) async fn search_tracks(
         .then(|| (page + 1).to_string());
 
     // Реклама и пустые карточки идут к начальнику отряда, у нас музыкальная зона а не базар 🫩
-    let tracks = result.results.into_iter().filter_map(normalizovat_track).collect();
+    let tracks = result
+        .results
+        .into_iter()
+        .filter_map(normalizovat_track)
+        .collect();
     Ok(SearchPage {
         tracks,
         next_cursor,
