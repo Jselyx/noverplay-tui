@@ -11,16 +11,14 @@ use crate::{
     model::{RepeatMode, TrackRef},
 };
 
-const ACCENT: Color = Color::Rgb(38, 220, 235);
-const MUTED: Color = Color::Rgb(139, 187, 196);
-const PANEL: Color = Color::Rgb(13, 22, 28);
+const PRIMARY: Color = Color::White;
+const MUTED: Color = Color::DarkGray;
+const PANEL: Color = Color::Black;
+const BORDER: Color = Color::White;
 
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
-    frame.render_widget(
-        Block::new().style(Style::new().bg(Color::Rgb(5, 10, 14))),
-        area,
-    );
+    frame.render_widget(Block::new().style(Style::new().fg(PRIMARY).bg(PANEL)), area);
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(8), Constraint::Length(4)])
@@ -64,7 +62,7 @@ fn draw_tabs(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Tabs::new(titles)
             .select(selected)
             .style(Style::new().fg(MUTED).bg(PANEL))
-            .highlight_style(Style::new().fg(Color::Black).bg(ACCENT)),
+            .highlight_style(Style::new().fg(Color::Black).bg(PRIMARY)),
         area,
     );
 }
@@ -78,7 +76,7 @@ fn draw_sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
             let style = if selected {
                 Style::new()
                     .fg(Color::Black)
-                    .bg(ACCENT)
+                    .bg(PRIMARY)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::new().fg(MUTED)
@@ -95,10 +93,10 @@ fn draw_sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let block = Block::new()
         .title(Line::from(vec![
             Span::styled(" NOVER", Style::new().fg(Color::White)),
-            Span::styled("PLAY ", Style::new().fg(ACCENT)),
+            Span::styled("PLAY ", Style::new().fg(PRIMARY)),
         ]))
         .borders(Borders::RIGHT)
-        .border_style(Style::new().fg(Color::Rgb(25, 52, 62)))
+        .border_style(Style::new().fg(BORDER))
         .style(Style::new().bg(PANEL));
     frame.render_widget(List::new(sections).block(block), area);
 }
@@ -123,7 +121,7 @@ fn draw_screen(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .block(
                 Block::new()
                     .borders(Borders::BOTTOM)
-                    .border_style(Style::new().fg(Color::Rgb(25, 52, 62))),
+                    .border_style(Style::new().fg(BORDER)),
             ),
         rows[0],
     );
@@ -167,9 +165,12 @@ fn draw_tracks(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .collect::<Vec<_>>();
     let mut state = ListState::default().with_selected(Some(app.selected));
     frame.render_stateful_widget(
-        List::new(items)
-            .highlight_symbol(" ▸ ")
-            .highlight_style(Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        List::new(items).highlight_symbol(" ▸ ").highlight_style(
+            Style::new()
+                .fg(Color::Black)
+                .bg(PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
         area,
         &mut state,
     );
@@ -190,7 +191,7 @@ fn track_item((index, track): (usize, &TrackRef)) -> ListItem<'static> {
         Line::from(vec![
             Span::raw("     "),
             Span::styled(track.display_artist(), Style::new().fg(MUTED)),
-            Span::styled(format!("  ·  {source}"), Style::new().fg(ACCENT)),
+            Span::styled(format!("  ·  {source}"), Style::new().fg(PRIMARY)),
         ]),
     ])
 }
@@ -223,7 +224,7 @@ fn draw_profile(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(""),
-            Line::styled("             ●", Style::new().fg(ACCENT)),
+            Line::styled("             ●", Style::new().fg(PRIMARY)),
             Line::styled("         Гостевой режим", Style::new().fg(Color::White)),
             Line::from(""),
             Line::styled(
@@ -266,7 +267,7 @@ fn draw_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Line::from(""),
             Line::styled(
                 " +/- громкость  ·  s перемешивание  ·  r повтор",
-                Style::new().fg(ACCENT),
+                Style::new().fg(PRIMARY),
             ),
         ]),
         area,
@@ -283,7 +284,7 @@ fn draw_player(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ])
         .split(area);
     frame.render_widget(
-        Paragraph::new(" ◢██◣\n █♫ █\n ◥██◤").style(Style::new().fg(ACCENT).bg(PANEL)),
+        Paragraph::new(" ◢██◣\n █♫ █\n ◥██◤").style(Style::new().fg(PRIMARY).bg(PANEL)),
         columns[0],
     );
     let track = app
@@ -311,7 +312,7 @@ fn draw_player(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(
         Gauge::default()
             .ratio(ratio)
-            .gauge_style(Style::new().fg(ACCENT).bg(Color::Rgb(20, 40, 48))),
+            .gauge_style(Style::new().fg(PRIMARY).bg(Color::DarkGray)),
         center[1],
     );
     frame.render_widget(
@@ -371,7 +372,7 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &Modal, area: Rect) {
                 Block::new()
                     .title(title)
                     .borders(Borders::ALL)
-                    .border_style(Style::new().fg(ACCENT)),
+                    .border_style(Style::new().fg(BORDER)),
             ),
         popup,
     );
@@ -449,5 +450,22 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, &app)).unwrap();
         assert!(terminal.backend().to_string().contains("Главная"));
+    }
+
+    #[test]
+    fn interface_stays_monochrome() {
+        let (_temp, app) = app();
+        let backend = TestBackend::new(120, 32);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        assert!(terminal.backend().buffer().content().iter().all(|cell| {
+            matches!(
+                cell.fg,
+                Color::Reset | Color::Black | Color::White | Color::Gray | Color::DarkGray
+            ) && matches!(
+                cell.bg,
+                Color::Reset | Color::Black | Color::White | Color::Gray | Color::DarkGray
+            )
+        }));
     }
 }
