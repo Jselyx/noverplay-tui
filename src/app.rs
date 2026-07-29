@@ -378,6 +378,13 @@ impl App {
         matches!(self.modal, Some(Modal::Onboarding(_)))
     }
 
+    pub fn text_modal_open(&self) -> bool {
+        matches!(
+            self.modal,
+            Some(Modal::Credential(_) | Modal::PlaylistImport(_))
+        )
+    }
+
     pub fn take_onboarding_result(&mut self) -> Option<OnboardingResult> {
         self.onboarding_result.take()
     }

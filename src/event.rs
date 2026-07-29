@@ -28,6 +28,7 @@ impl EventPump {
         &mut self,
         search_mode: bool,
         modal_open: bool,
+        text_modal: bool,
         search_has_results: bool,
     ) -> Action {
         tokio::select! {
@@ -35,7 +36,7 @@ impl EventPump {
             event = self.terminal.next() => {
                 match event {
                     Some(Ok(CrosstermEvent::Key(key))) if key.is_press() => {
-                        map_key(key, search_mode, modal_open, search_has_results)
+                        map_key(key, search_mode, modal_open, text_modal, search_has_results)
                     }
                     Some(Ok(CrosstermEvent::Resize(_, _))) => Action::Resize,
                     Some(Ok(CrosstermEvent::Mouse(mouse))) => match mouse.kind {
@@ -56,9 +57,26 @@ impl Default for EventPump {
     }
 }
 
-fn map_key(key: KeyEvent, search_mode: bool, modal_open: bool, search_has_results: bool) -> Action {
+fn map_key(
+    key: KeyEvent,
+    search_mode: bool,
+    modal_open: bool,
+    text_modal: bool,
+    search_has_results: bool,
+) -> Action {
     // да тут много клавиш, терминал сам их телепатией не распарсит АЛЛООООО 🤡
     if modal_open {
+        if text_modal {
+            return match key.code {
+                KeyCode::Esc => Action::CloseModal,
+                KeyCode::Enter => Action::ModalSubmit,
+                KeyCode::Tab | KeyCode::Down => Action::ModalNext,
+                KeyCode::BackTab | KeyCode::Up => Action::ModalPrevious,
+                KeyCode::Backspace => Action::ModalBackspace,
+                KeyCode::Char(value) => Action::ModalInput(value),
+                _ => Action::Resize,
+            };
+        }
         return match key.code {
             KeyCode::Esc => Action::CloseModal,
             KeyCode::Enter => Action::ModalSubmit,
@@ -121,14 +139,20 @@ mod tests {
     #[test]
     fn enter_activates_ready_search_result() {
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(map_key(key, true, false, true), Action::Activate);
-        assert_eq!(map_key(key, true, false, false), Action::SubmitSearch);
+        assert_eq!(map_key(key, true, false, false, true), Action::Activate);
+        assert_eq!(
+            map_key(key, true, false, false, false),
+            Action::SubmitSearch
+        );
     }
 
     #[test]
     fn command_palette_survives_search_input_mode() {
         let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
-        assert_eq!(map_key(key, true, false, false), Action::OpenCommandPalette);
+        assert_eq!(
+            map_key(key, true, false, false, false),
+            Action::OpenCommandPalette
+        );
     }
 
     #[test]
@@ -138,6 +162,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
                 false,
                 true,
+                false,
                 false
             ),
             Action::ModalNext
@@ -147,9 +172,26 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
                 false,
                 true,
+                false,
                 false
             ),
             Action::ModalInput('C')
         );
+    }
+
+    #[test]
+    fn text_modal_does_not_steal_j_and_k_for_fake_vim_navigation() {
+        for value in ['j', 'k'] {
+            assert_eq!(
+                map_key(
+                    KeyEvent::new(KeyCode::Char(value), KeyModifiers::NONE),
+                    false,
+                    true,
+                    true,
+                    false,
+                ),
+                Action::ModalInput(value)
+            );
+        }
     }
 }

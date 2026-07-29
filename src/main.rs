@@ -68,7 +68,12 @@ async fn run_tui() -> Result<()> {
         let search_has_results = search_mode && !app.search_results.is_empty();
         let onboarding_open = app.onboarding_open();
         let action = events
-            .next(search_mode, app.modal.is_some(), search_has_results)
+            .next(
+                search_mode,
+                app.modal.is_some(),
+                app.text_modal_open(),
+                search_has_results,
+            )
             .await;
         app.handle(action);
         drive_runtime(&mut app, &mut runtime);
