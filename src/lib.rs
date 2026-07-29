@@ -1,3 +1,4 @@
+pub mod account;
 pub mod action;
 pub mod app;
 pub mod audio;
