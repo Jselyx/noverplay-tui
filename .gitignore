@@ -13,6 +13,21 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+# Локальные служебные файлы
+.claude/
+.codex/
+.skills/
+.agents/
+.gitnexus/
+AGENTS.md
+CLAUDE.md
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+*.bak
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

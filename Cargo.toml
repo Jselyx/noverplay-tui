@@ -1,0 +1,26 @@
+[package]
+name = "noverplay-tui"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Терминальный музыкальный клиент Noverplay"
+
+[[bin]]
+name = "noverplay"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+ratatui = "0.30"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
