@@ -89,6 +89,7 @@ fn map_key(key: KeyEvent, search_mode: bool, modal_open: bool, search_has_result
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Char('?') => Action::OpenHelp,
         KeyCode::Char('/') => Action::StartSearch,
+        KeyCode::Char('i') => Action::OpenPlaylistImport,
         KeyCode::Char(' ') => Action::TogglePause,
         KeyCode::Char('j') | KeyCode::Down => Action::SelectNext,
         KeyCode::Char('k') | KeyCode::Up => Action::SelectPrevious,

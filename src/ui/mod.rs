@@ -1,4 +1,5 @@
 mod credential;
+mod import;
 mod onboarding;
 
 use ratatui::{
@@ -348,14 +349,19 @@ fn draw_modal(frame: &mut Frame<'_>, app: &App, modal: &Modal, area: Rect) {
         credential::draw(frame, editor, app.credentials, area);
         return;
     }
+    if let Modal::PlaylistImport(editor) = modal {
+        import::draw(frame, editor, area);
+        return;
+    }
     let popup = centered_rect(64, 60, area);
     frame.render_widget(Clear, popup);
     let (title, body) = match modal {
         Modal::Onboarding(_) => unreachable!(),
         Modal::Credential(_) => unreachable!(),
+        Modal::PlaylistImport(_) => unreachable!(),
         Modal::Help => (
             " Клавиши ",
-            "1-8 разделы    / поиск\n↑↓ или jk выбор   Enter открыть\nSpace пауза       n/p следующий/предыдущий\n←→ или hl ±10 сек  +/- громкость\ns перемешивание   r повтор\nq выход           Esc закрыть",
+            "1-8 разделы    / поиск\ni импорт          Enter открыть\n↑↓ или jk выбор   Space пауза\nn/p трек          ←→ или hl ±10 сек\n+/- громкость     s/r режимы\nq выход           Esc закрыть",
         ),
         Modal::CommandPalette => (
             " Команды ",

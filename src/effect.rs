@@ -13,6 +13,7 @@ pub enum AppEffect {
         kind: CredentialKind,
         value: String,
     },
+    ImportPlaylist(String),
     ProbeSoundCloud,
     PlanZapret(PathBuf),
     ApplyZapret(Box<ZapretPlan>),

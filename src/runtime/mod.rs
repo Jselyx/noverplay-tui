@@ -1,3 +1,4 @@
+mod importer;
 mod message;
 mod onboarding;
 mod playback;
@@ -23,6 +24,7 @@ use crate::{
     storage::{HistoryEntry, Storage},
 };
 
+use importer::spawn_import;
 use message::RuntimeMessage;
 use onboarding::{spawn_soundcloud_probe, spawn_zapret_apply, spawn_zapret_plan};
 use playback::spawn_playback;
@@ -40,10 +42,12 @@ pub struct Runtime {
     search_task: Option<JoinHandle<()>>,
     playback_task: Option<JoinHandle<()>>,
     wave_task: Option<JoinHandle<()>>,
+    import_task: Option<JoinHandle<()>>,
     onboarding_task: Option<JoinHandle<()>>,
     search_generation: u64,
     playback_generation: u64,
     wave_generation: u64,
+    import_generation: u64,
     onboarding_generation: u64,
     search_delay: Duration,
     last_audio_status: Option<AudioStatus>,
@@ -75,10 +79,12 @@ impl Runtime {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            import_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            import_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::from_millis(config.search_debounce_ms),
             last_audio_status: None,
@@ -101,6 +107,7 @@ impl Runtime {
                     self.start_search(query, immediate, &mut actions)
                 }
                 AppEffect::GenerateWave => self.start_wave(&mut actions),
+                AppEffect::ImportPlaylist(source) => self.start_import(source),
                 AppEffect::SaveCredential { kind, value } => {
                     actions.push(Action::CredentialSaved {
                         kind,
@@ -211,6 +218,11 @@ impl Runtime {
                     failures,
                 } if generation == self.wave_generation => {
                     actions.push(Action::WaveFinished { tracks, failures });
+                }
+                RuntimeMessage::PlaylistImported { generation, result }
+                    if generation == self.import_generation =>
+                {
+                    actions.push(Action::PlaylistImported(result));
                 }
                 RuntimeMessage::SoundCloudChecked { generation, access }
                     if generation == self.onboarding_generation =>
@@ -376,6 +388,20 @@ impl Runtime {
         ));
     }
 
+    fn start_import(&mut self, source: String) {
+        if let Some(task) = self.import_task.take() {
+            task.abort();
+        }
+        self.import_generation = self.import_generation.wrapping_add(1);
+        self.import_task = Some(spawn_import(
+            Arc::clone(&self.providers),
+            self.storage.clone(),
+            self.sender.clone(),
+            self.import_generation,
+            source,
+        ));
+    }
+
     fn cancel_playback(&mut self) {
         if let Some(task) = self.playback_task.take() {
             task.abort();
@@ -391,6 +417,9 @@ impl Runtime {
         spawn: impl FnOnce(mpsc::UnboundedSender<RuntimeMessage>, u64) -> JoinHandle<()>,
     ) {
         if let Some(task) = self.onboarding_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.import_task.take() {
             task.abort();
         }
         self.onboarding_generation = self.onboarding_generation.wrapping_add(1);
@@ -452,10 +481,12 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            import_task: None,
             onboarding_task: None,
             search_generation: 7,
             playback_generation: 3,
             wave_generation: 0,
+            import_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,
@@ -507,10 +538,12 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            import_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            import_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::from_secs(1),
             last_audio_status: None,
@@ -544,10 +577,12 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            import_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            import_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,
@@ -590,10 +625,12 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            import_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            import_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,
@@ -626,10 +663,12 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            import_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            import_generation: 0,
             onboarding_generation: 0,
             search_delay: Duration::ZERO,
             last_audio_status: None,

@@ -1,5 +1,5 @@
 use crate::{
-    model::{PlaybackSource, TrackRef},
+    model::{PlaybackSource, Playlist, TrackRef},
     onboarding::{
         SoundCloudAccess,
         zapret::{ZapretApplyResult, ZapretPlan},
@@ -17,6 +17,10 @@ pub(super) enum RuntimeMessage {
         generation: u64,
         tracks: Vec<TrackRef>,
         failures: Vec<String>,
+    },
+    PlaylistImported {
+        generation: u64,
+        result: Result<Playlist, String>,
     },
     PlaybackReady {
         generation: u64,

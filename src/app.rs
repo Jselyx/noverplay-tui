@@ -5,6 +5,7 @@ use crate::{
     config::AppConfig,
     credentials::{CredentialEditor, CredentialKind, CredentialState},
     effect::AppEffect,
+    importer::PlaylistImportEditor,
     model::{Playlist, RepeatMode, TrackRef},
     onboarding::{AccountMode, OnboardingCommand, OnboardingResult, OnboardingState},
     storage::{QueueSnapshot, Storage},
@@ -100,6 +101,7 @@ impl Default for PlayerState {
 pub enum Modal {
     Onboarding(Box<OnboardingState>),
     Credential(Box<CredentialEditor>),
+    PlaylistImport(Box<PlaylistImportEditor>),
     Help,
     CommandPalette,
 }
@@ -309,6 +311,10 @@ impl App {
             }
             Action::OpenHelp => self.modal = Some(Modal::Help),
             Action::OpenCommandPalette => self.modal = Some(Modal::CommandPalette),
+            Action::OpenPlaylistImport => {
+                self.modal = Some(Modal::PlaylistImport(Box::default()));
+                self.status_message = "Вставь ссылку на плейлист SoundCloud или Yandex".to_string();
+            }
             Action::CloseModal => self.close_modal(),
             Action::ModalSubmit => self.submit_modal(),
             Action::ModalPrevious => self.move_modal_selection(false),
@@ -317,6 +323,7 @@ impl App {
             Action::ModalInput(value) => self.input_modal(value),
             Action::ModalBackspace => self.backspace_modal(),
             Action::CredentialSaved { kind, result } => self.finish_credential_save(kind, result),
+            Action::PlaylistImported(result) => self.finish_playlist_import(result),
             Action::SoundCloudChecked(access) => {
                 self.update_onboarding(|state| state.soundcloud_checked(access));
             }
@@ -570,6 +577,17 @@ impl App {
                     value,
                 });
             }
+            Some(Modal::PlaylistImport(editor)) => {
+                let url = editor.url.trim().to_string();
+                if url.is_empty() {
+                    self.status_message =
+                        "Ссылка пустая, импортировать телепатию пока нельзя".to_string();
+                    return;
+                }
+                editor.loading = true;
+                self.status_message = "Импортируем плейлист".to_string();
+                self.effects.push(AppEffect::ImportPlaylist(url));
+            }
             _ => self.close_modal(),
         }
     }
@@ -596,6 +614,7 @@ impl App {
         match self.modal.as_mut() {
             Some(Modal::Onboarding(state)) => state.input(value),
             Some(Modal::Credential(editor)) => editor.input(value),
+            Some(Modal::PlaylistImport(editor)) => editor.input(value),
             _ => {}
         }
     }
@@ -604,6 +623,7 @@ impl App {
         match self.modal.as_mut() {
             Some(Modal::Onboarding(state)) => state.backspace(),
             Some(Modal::Credential(editor)) => editor.backspace(),
+            Some(Modal::PlaylistImport(editor)) => editor.backspace(),
             _ => {}
         }
     }
@@ -625,6 +645,34 @@ impl App {
                     editor.saving = false;
                 }
                 self.status_message = format!("Не удалось сохранить {}: {error}", kind.label());
+            }
+        }
+    }
+
+    fn finish_playlist_import(&mut self, result: Result<Playlist, String>) {
+        match result {
+            Ok(playlist) => {
+                let title = playlist.title.clone();
+                let count = playlist.tracks.len();
+                if let Some(index) = self
+                    .playlists
+                    .iter()
+                    .position(|current| current.id == playlist.id)
+                {
+                    self.playlists[index] = playlist;
+                } else {
+                    self.playlists.insert(0, playlist);
+                }
+                self.screen = Screen::Playlists;
+                self.selected = 0;
+                self.modal = None;
+                self.status_message = format!("Импортирован «{title}»: {count} треков");
+            }
+            Err(error) => {
+                if let Some(Modal::PlaylistImport(editor)) = self.modal.as_mut() {
+                    editor.loading = false;
+                }
+                self.status_message = format!("Импорт не удался: {error}");
             }
         }
     }
@@ -756,6 +804,29 @@ mod tests {
                 value: "client-id".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn imported_playlist_opens_the_real_playlist_screen() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(
+            &storage,
+            &AppConfig {
+                onboarding_completed: true,
+                ..AppConfig::default()
+            },
+        )
+        .unwrap();
+        let mut playlist = Playlist::new("Микс", 1);
+        playlist.push_unique(test_track());
+
+        app.handle(Action::PlaylistImported(Ok(playlist)));
+
+        assert_eq!(app.screen, Screen::Playlists);
+        assert_eq!(app.playlists.len(), 1);
+        assert!(app.status_message.contains("1 треков"));
     }
 
     #[test]
