@@ -12,6 +12,7 @@ pub enum SecretKey {
     InstallationId,
     InstallationPrivateKey,
     SoundCloudClientId,
+    SoundCloudClientIdOverride,
     YandexToken,
     DeezerArl,
 }
@@ -23,6 +24,7 @@ impl SecretKey {
             Self::InstallationId => "installation-id",
             Self::InstallationPrivateKey => "installation-private-key",
             Self::SoundCloudClientId => "soundcloud-client-id",
+            Self::SoundCloudClientIdOverride => "soundcloud-client-id-override",
             Self::YandexToken => "yandex-token",
             Self::DeezerArl => "deezer-arl",
         }

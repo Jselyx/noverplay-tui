@@ -20,7 +20,7 @@ impl CredentialKind {
 
     pub const fn secret_key(self) -> SecretKey {
         match self {
-            Self::SoundCloudClientId => SecretKey::SoundCloudClientId,
+            Self::SoundCloudClientId => SecretKey::SoundCloudClientIdOverride,
             Self::YandexToken => SecretKey::YandexToken,
         }
     }
@@ -64,7 +64,8 @@ impl CredentialEditor {
 impl CredentialState {
     pub fn load(secrets: &SecretStore) -> Result<Self> {
         Ok(Self {
-            soundcloud: has_value(secrets, SecretKey::SoundCloudClientId)?,
+            soundcloud: has_value(secrets, SecretKey::SoundCloudClientIdOverride)?
+                || has_value(secrets, SecretKey::SoundCloudClientId)?,
             yandex: has_value(secrets, SecretKey::YandexToken)?,
         })
     }
@@ -99,7 +100,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let secrets = SecretStore::file_only(temp.path().join("secrets.json"));
         secrets
-            .set(SecretKey::SoundCloudClientId, "client-id")
+            .set(SecretKey::SoundCloudClientIdOverride, "client-id")
             .unwrap();
 
         let state = CredentialState::load(&secrets).unwrap();

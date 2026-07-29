@@ -32,7 +32,7 @@ async fn run_tui() -> Result<()> {
     let secrets = SecretStore::new(paths.secrets_file.clone());
     if let Some(client_id) = config.soundcloud_client_id_override.take() {
         secrets.set(
-            noverplay_tui::secrets::SecretKey::SoundCloudClientId,
+            noverplay_tui::secrets::SecretKey::SoundCloudClientIdOverride,
             &client_id,
         )?;
         config.save(&paths)?;

@@ -17,6 +17,7 @@ pub(super) fn build_registry(config: &AppConfig, secrets: &SecretStore) -> Provi
         let soundcloud_key = config
             .soundcloud_client_id_override
             .clone()
+            .or_else(|| load_secret(secrets, SecretKey::SoundCloudClientIdOverride, &mut notices))
             .or_else(|| load_secret(secrets, SecretKey::SoundCloudClientId, &mut notices));
         if let Some(client_id) = soundcloud_key.filter(|value| !value.trim().is_empty()) {
             match SoundCloudProvider::new(client_id) {
