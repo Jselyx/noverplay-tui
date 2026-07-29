@@ -1831,6 +1831,7 @@ name = "noverplay-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "cpal",
  "crossbeam-channel",
