@@ -25,6 +25,8 @@ pub struct CaptchaChallenge {
     pub expires_at: String,
     #[serde(default)]
     pub disabled: bool,
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

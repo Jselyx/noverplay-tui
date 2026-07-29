@@ -93,7 +93,7 @@ fn draw_captcha(frame: &mut Frame<'_>, dialog: &AccountDialog, area: Rect, popup
         .is_some_and(|challenge| challenge.captcha_kind == "text");
     frame.render_widget(
         Paragraph::new(if text_mode {
-            "Введи код с картинки"
+            "Реши задачу"
         } else {
             "Нажми иконки по порядку"
         })
@@ -116,9 +116,22 @@ fn draw_captcha(frame: &mut Frame<'_>, dialog: &AccountDialog, area: Rect, popup
             Paragraph::new(lines).style(Style::new().fg(Color::White).bg(Color::Black)),
             captcha_area,
         );
+    } else if text_mode {
+        let prompt = dialog
+            .challenge
+            .as_ref()
+            .and_then(|challenge| challenge.prompt.as_deref())
+            .unwrap_or("Введи ответ на вопрос сервера");
+        frame.render_widget(
+            Paragraph::new(format!("\n\n{prompt}"))
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true })
+                .style(Style::new().fg(Color::White).bg(Color::Black)),
+            captcha_area,
+        );
     }
     let progress = if text_mode {
-        format!("Код: {}_", dialog.captcha_answer)
+        format!("Ответ: {}_", dialog.captcha_answer)
     } else {
         format!(
             "Выбрано {}/{}",

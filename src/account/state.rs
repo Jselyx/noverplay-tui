@@ -152,9 +152,13 @@ impl AccountDialog {
     }
 
     pub fn set_challenge(&mut self, challenge: CaptchaChallenge) -> Result<()> {
-        let raster = CaptchaRaster::from_data_url(&challenge.image_data_url)?;
+        let raster = if challenge.captcha_kind == "text" {
+            None
+        } else {
+            Some(CaptchaRaster::from_data_url(&challenge.image_data_url)?)
+        };
         self.challenge = Some(challenge);
-        self.raster = Some(raster);
+        self.raster = raster;
         self.captcha_answer.clear();
         self.clicks.clear();
         self.stage = AccountDialogStage::Captcha;
@@ -193,7 +197,7 @@ impl AccountDialog {
     pub fn solution(&self) -> Result<CaptchaSolution> {
         if self.is_text_captcha() {
             if self.captcha_answer.trim().is_empty() {
-                bail!("Введи код с картинки")
+                bail!("Введи ответ на задачу")
             }
         } else if self.clicks.len() != self.required_clicks() || self.clicks.is_empty() {
             bail!("Нажми иконки в указанном порядке")
@@ -288,6 +292,21 @@ mod tests {
             action_type: "login".to_string(),
             expires_at: "later".to_string(),
             disabled: false,
+            prompt: None,
         }
+    }
+
+    #[test]
+    fn text_challenge_does_not_demand_a_fake_picture() {
+        let mut dialog = AccountDialog::new(AccountAction::Login);
+        let mut challenge = challenge();
+        challenge.captcha_kind = "text".to_string();
+        challenge.image_data_url.clear();
+        challenge.prompt = Some("Сколько будет 2 + 2?".to_string());
+        dialog.set_challenge(challenge).unwrap();
+
+        assert!(dialog.raster.is_none());
+        dialog.input('4');
+        assert_eq!(dialog.solution().unwrap().answer, "4");
     }
 }

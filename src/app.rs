@@ -1351,6 +1351,7 @@ mod tests {
                 action_type: "login".to_string(),
                 expires_at: "later".to_string(),
                 disabled: false,
+                prompt: None,
             }),
         });
         let area = crate::account::captcha::captcha_cell_area(100, 32);
