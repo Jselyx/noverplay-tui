@@ -2,6 +2,7 @@ mod client;
 mod mapping;
 mod models;
 mod playlist;
+mod related;
 mod search;
 mod source_url;
 mod track_details;
@@ -17,6 +18,7 @@ use crate::{
 
 use client::SoundCloudClient;
 use playlist::import_playlist;
+use related::related_tracks;
 use search::search_tracks;
 
 pub use mapping::normalizovat_track;
@@ -56,8 +58,8 @@ impl MusicProvider for SoundCloudProvider {
         import_playlist(&self.client, url).await
     }
 
-    async fn related(&self, _track: &TrackRef, _limit: usize) -> Result<Vec<TrackRef>> {
-        bail!("рекомендации SoundCloud еще не подключены")
+    async fn related(&self, track: &TrackRef, limit: usize) -> Result<Vec<TrackRef>> {
+        related_tracks(&self.client, track, limit).await
     }
 
     async fn playback_source(&self, _track: &TrackRef) -> Result<PlaybackSource> {
