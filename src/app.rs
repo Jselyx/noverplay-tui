@@ -128,6 +128,14 @@ pub struct App {
 
 impl App {
     pub fn load(storage: &Storage, config: &AppConfig) -> Result<Self> {
+        Self::load_with_audio_outputs(storage, config, Vec::new())
+    }
+
+    pub fn load_with_audio_outputs(
+        storage: &Storage,
+        config: &AppConfig,
+        audio_outputs: Vec<String>,
+    ) -> Result<Self> {
         let queue = storage.load_queue()?;
         let queue_index = queue.current_index;
         let now_playing = queue_index.and_then(|index| queue.tracks.get(index).cloned());
@@ -150,7 +158,10 @@ impl App {
                 ..PlayerState::default()
             },
             modal: (!config.onboarding_completed).then(|| {
-                Modal::Onboarding(Box::new(OnboardingState::new(config.audio_output.clone())))
+                Modal::Onboarding(Box::new(OnboardingState::with_audio_outputs(
+                    config.audio_output.clone(),
+                    audio_outputs,
+                )))
             }),
             should_quit: false,
             dirty: true,

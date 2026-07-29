@@ -90,20 +90,31 @@ fn providers(state: &OnboardingState) -> Vec<Line<'static>> {
 }
 
 fn audio(state: &OnboardingState) -> Vec<Line<'static>> {
-    let output = state
-        .audio_output
-        .as_deref()
-        .unwrap_or("Системный аудиовыход")
-        .to_string();
-    vec![
-        heading("Аудиовыход"),
-        Line::from(""),
-        selected_line(format!("  {output}")),
-        Line::from(""),
-        muted("CPAL проверит устройство при запуске плеера"),
-        Line::from(""),
-        Line::from("Enter  проверить SoundCloud и закончить"),
-    ]
+    let mut lines = vec![heading("Аудиовыход"), Line::from("")];
+    let start = state.selected.saturating_sub(4);
+    lines.extend(
+        state
+            .audio_outputs
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(8)
+            .map(|(index, output)| {
+                let label = output.as_deref().unwrap_or("Системный аудиовыход");
+                if index == state.selected {
+                    selected_line(format!(" > {label} "))
+                } else {
+                    Line::styled(format!("   {label}"), Style::new().fg(MUTED))
+                }
+            }),
+    );
+    lines.push(Line::from(""));
+    lines.push(muted(
+        "↑↓ выбирает устройство, список не грузится целиком в экран",
+    ));
+    lines.push(Line::from(""));
+    lines.push(Line::from("Enter  проверить SoundCloud и закончить"));
+    lines
 }
 
 fn checking() -> Vec<Line<'static>> {

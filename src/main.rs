@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use noverplay_tui::{
     app::{App, Screen},
+    audio::AudioEngine,
     cli::{Cli, run_command},
     config::{AppConfig, AppPaths},
     event::EventPump,
@@ -30,7 +31,12 @@ async fn run_tui() -> Result<()> {
     let mut config = AppConfig::load(&paths)?.normalized();
     let storage = Storage::new(paths.database_file.clone());
     storage.initialize()?;
-    let mut app = App::load(&storage, &config)?;
+    let audio_outputs = if config.onboarding_completed {
+        Vec::new()
+    } else {
+        AudioEngine::output_devices().unwrap_or_default()
+    };
+    let mut app = App::load_with_audio_outputs(&storage, &config, audio_outputs)?;
     let secrets = SecretStore::new(paths.secrets_file.clone());
     let mut runtime = Runtime::new(&config, &secrets, storage.clone());
     if let Some(notice) = runtime.take_notices().into_iter().last() {

@@ -42,6 +42,7 @@ pub struct OnboardingState {
     pub soundcloud_enabled: bool,
     pub yandex_enabled: bool,
     pub audio_output: Option<String>,
+    pub audio_outputs: Vec<Option<String>>,
     pub zapret_path: String,
     pub soundcloud_problem: Option<String>,
     pub zapret_plan: Option<ZapretPlan>,
@@ -58,6 +59,25 @@ pub struct OnboardingResult {
 
 impl OnboardingState {
     pub fn new(audio_output: Option<String>) -> Self {
+        Self::with_audio_outputs(audio_output, Vec::new())
+    }
+
+    pub fn with_audio_outputs(audio_output: Option<String>, outputs: Vec<String>) -> Self {
+        let mut audio_outputs = vec![None];
+        for output in outputs {
+            let output = output.trim().to_string();
+            if !output.is_empty() && !audio_outputs.iter().flatten().any(|known| known == &output) {
+                audio_outputs.push(Some(output));
+            }
+        }
+        if let Some(current) = audio_output.clone()
+            && !audio_outputs
+                .iter()
+                .flatten()
+                .any(|known| known == &current)
+        {
+            audio_outputs.push(Some(current));
+        }
         Self {
             step: OnboardingStep::Welcome,
             selected: 0,
@@ -65,6 +85,7 @@ impl OnboardingState {
             soundcloud_enabled: true,
             yandex_enabled: true,
             audio_output,
+            audio_outputs,
             zapret_path: default_zapret_path(),
             soundcloud_problem: None,
             zapret_plan: None,
@@ -128,6 +149,11 @@ impl OnboardingState {
             }
             OnboardingStep::Providers => self.go(OnboardingStep::Audio),
             OnboardingStep::Audio => {
+                self.audio_output = self
+                    .audio_outputs
+                    .get(self.selected)
+                    .cloned()
+                    .unwrap_or(None);
                 if self.soundcloud_enabled {
                     self.go(OnboardingStep::CheckingSoundCloud);
                     return OnboardingCommand::ProbeSoundCloud;
@@ -220,6 +246,7 @@ impl OnboardingState {
         match self.step {
             OnboardingStep::Account => 2,
             OnboardingStep::Providers | OnboardingStep::ZapretChoice => 3,
+            OnboardingStep::Audio => self.audio_outputs.len(),
             _ => 1,
         }
     }
@@ -294,6 +321,20 @@ mod tests {
             state.confirm(),
             OnboardingCommand::PlanZapret(PathBuf::from("C:\\zapret"))
         );
+    }
+
+    #[test]
+    fn audio_step_keeps_default_and_real_devices() {
+        let mut state = OnboardingState::with_audio_outputs(
+            None,
+            vec!["Колонки".to_string(), "Наушники".to_string()],
+        );
+        state.step = OnboardingStep::Audio;
+        state.select_next();
+        state.select_next();
+
+        assert_eq!(state.confirm(), OnboardingCommand::ProbeSoundCloud);
+        assert_eq!(state.audio_output.as_deref(), Some("Наушники"));
     }
 
     fn reach_probe() -> OnboardingState {
