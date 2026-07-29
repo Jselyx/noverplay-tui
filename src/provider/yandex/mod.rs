@@ -1,5 +1,6 @@
 mod client;
 mod mapping;
+mod playback;
 mod playlist;
 mod playlist_tracks;
 mod playlist_url;
@@ -10,7 +11,7 @@ mod uuid_playlist;
 
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use async_trait::async_trait;
 use url::Url;
 use yandex_music::YandexMusicClient;
@@ -21,6 +22,7 @@ use crate::{
 };
 
 use client::build_client;
+use playback::poluchit_istochnik;
 use playlist::import_playlist;
 use related::related_tracks;
 use search::search_tracks;
@@ -65,8 +67,8 @@ impl MusicProvider for YandexProvider {
         related_tracks(&self.client, track, limit).await
     }
 
-    async fn playback_source(&self, _track: &TrackRef) -> Result<PlaybackSource> {
-        bail!("воспроизведение Yandex Music еще не подключено")
+    async fn playback_source(&self, track: &TrackRef) -> Result<PlaybackSource> {
+        poluchit_istochnik(&self.client, track).await
     }
 }
 
