@@ -24,6 +24,17 @@ impl CredentialKind {
             Self::YandexToken => SecretKey::YandexToken,
         }
     }
+
+    pub const fn hint(self) -> &'static str {
+        match self {
+            Self::SoundCloudClientId => {
+                "После входа ключ приходит сам, здесь можно вставить собственный client_id"
+            }
+            Self::YandexToken => {
+                "Вставь OAuth из расширения yandex-music-token, токен останется только локально"
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

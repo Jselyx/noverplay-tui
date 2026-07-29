@@ -602,6 +602,7 @@ mod tests {
 
         let content = terminal.backend().to_string();
         assert!(content.contains("SoundCloud client_id"));
+        assert!(content.contains("После входа ключ приходит сам"));
         assert!(!content.contains("super-secret-client-id"));
     }
 

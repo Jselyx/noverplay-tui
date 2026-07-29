@@ -38,6 +38,8 @@ pub(super) fn draw(
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(""),
+            Line::from(editor.kind.hint()),
+            Line::from(""),
             Line::from(format!("  {field}")),
             Line::from(""),
             Line::from(hint),
