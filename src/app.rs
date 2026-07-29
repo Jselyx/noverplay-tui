@@ -420,6 +420,8 @@ impl App {
             "Введите запрос".to_string()
         } else if self.search_results.is_empty() && !failures.is_empty() {
             failures.join("; ")
+        } else if self.search_results.is_empty() {
+            "Ничего не найдено".to_string()
         } else if failures.is_empty() {
             format!("Найдено: {}", self.search_results.len())
         } else {

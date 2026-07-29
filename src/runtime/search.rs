@@ -49,10 +49,27 @@ fn merge_pages(
                     }
                 }
             }
-            Err(error) => failures.push(format!("{}: {error}", kind.label())),
+            Err(error) => failures.push(provider_failure(kind, &error)),
         }
     }
     (tracks, failures)
+}
+
+fn provider_failure(kind: crate::model::ProviderKind, error: &anyhow::Error) -> String {
+    let detail = format!("{error:#}");
+    let lower = detail.to_ascii_lowercase();
+    let credential_rejected = ["401", "403", "unauthorized", "forbidden"]
+        .iter()
+        .any(|marker| lower.contains(marker));
+    match (kind, credential_rejected) {
+        (crate::model::ProviderKind::SoundCloud, true) => {
+            "SoundCloud: client_id отклонён, обнови его в Настройках".to_string()
+        }
+        (crate::model::ProviderKind::YandexMusic, true) => {
+            "Yandex Music: OAuth токен отклонён, обнови его в Настройках".to_string()
+        }
+        _ => format!("{}: {detail}", kind.label()),
+    }
 }
 
 #[cfg(test)]
@@ -86,6 +103,17 @@ mod tests {
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].provider, ProviderKind::SoundCloud);
         assert_eq!(failures.len(), 1);
+    }
+
+    #[test]
+    fn rejected_key_points_to_the_settings_instead_of_mumbling() {
+        let error = anyhow::anyhow!("HTTP status client error (401 Unauthorized)")
+            .context("SoundCloud отклонил запрос");
+
+        assert_eq!(
+            provider_failure(ProviderKind::SoundCloud, &error),
+            "SoundCloud: client_id отклонён, обнови его в Настройках"
+        );
     }
 
     fn track(provider: ProviderKind, id: &str) -> TrackRef {

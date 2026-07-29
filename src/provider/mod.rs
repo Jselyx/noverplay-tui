@@ -71,6 +71,10 @@ impl ProviderRegistry {
         self.providers.keys().copied()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.providers.is_empty()
+    }
+
     pub async fn search_all(&self, query: &str) -> Vec<(ProviderKind, Result<SearchPage>)> {
         let mut pending = FuturesUnordered::new();
         for provider in self.providers.values() {

@@ -296,6 +296,16 @@ impl Runtime {
             });
             return;
         }
+        if self.providers.is_empty() {
+            actions.push(Action::SearchFinished {
+                query,
+                tracks: Vec::new(),
+                failures: vec![
+                    "Сначала добавь SoundCloud client_id или Yandex OAuth в Настройках".to_string(),
+                ],
+            });
+            return;
+        }
         let delay = if immediate {
             Duration::ZERO
         } else {
