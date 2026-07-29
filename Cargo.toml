@@ -29,6 +29,7 @@ toml = "0.9"
 symphonia = { version = "0.6", default-features = false, features = ["aac", "flac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+yandex-music = "0.4.8"
 
 [dev-dependencies]
 tempfile = "3"
