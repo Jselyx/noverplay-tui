@@ -944,16 +944,23 @@ impl App {
             return;
         }
         match result {
-            Ok(challenge) => match dialog.set_challenge(challenge) {
-                Ok(()) => {
-                    self.status_message = "Нажми четыре иконки по порядку".to_string();
+            Ok(challenge) => {
+                let text_mode = challenge.captcha_kind == "text";
+                match dialog.set_challenge(challenge) {
+                    Ok(()) => {
+                        self.status_message = if text_mode {
+                            "Реши задачу и введи ответ".to_string()
+                        } else {
+                            "Нажми четыре иконки по порядку".to_string()
+                        };
+                    }
+                    Err(error) => {
+                        dialog.stage = AccountDialogStage::Credentials;
+                        dialog.error = Some(error.to_string());
+                        self.status_message = format!("CAPTCHA не открылась: {error}");
+                    }
                 }
-                Err(error) => {
-                    dialog.stage = AccountDialogStage::Credentials;
-                    dialog.error = Some(error.to_string());
-                    self.status_message = format!("CAPTCHA не открылась: {error}");
-                }
-            },
+            }
             Err(error) => {
                 dialog.stage = AccountDialogStage::Credentials;
                 dialog.error = Some(error.to_string());
