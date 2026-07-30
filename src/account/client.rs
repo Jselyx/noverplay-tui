@@ -310,4 +310,24 @@ mod tests {
         assert_eq!(challenge.captcha_id, "id");
         assert_eq!(challenge.click_count_required, 4);
     }
+
+    #[tokio::test]
+    #[ignore = "ходит на production только при ручном smoke-тесте"]
+    async fn live_server_returns_a_question_to_tui() {
+        let temp = tempfile::tempdir().unwrap();
+        let secrets = SecretStore::file_only(temp.path().join("secrets.json"));
+        let server_url = std::env::var("NOVERPLAY_LIVE_SERVER_URL")
+            .unwrap_or_else(|_| "https://api.noverplay.space".to_string());
+        let client = AccountClient::new(&server_url, &secrets).unwrap();
+
+        let challenge = client.captcha(AccountAction::Login).await.unwrap();
+
+        assert_eq!(challenge.captcha_kind, "text");
+        assert!(challenge.image_data_url.is_empty());
+        assert!(
+            challenge
+                .prompt
+                .is_some_and(|value| !value.trim().is_empty())
+        );
+    }
 }
