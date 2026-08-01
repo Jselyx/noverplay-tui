@@ -38,6 +38,9 @@ uuid = { version = "1", features = ["serde", "v4"] }
 yandex-music = "0.4.8"
 zeroize = "1"
 global-hotkey = "0.7.0"
+blowfish = "0.9"
+cbc = "0.1"
+md5 = "0.7"
 
 [dev-dependencies]
 tempfile = "3"

@@ -411,6 +411,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "blowfish"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e412e2cd0f2b2d93e02543ceae7917b3c70331573df19ee046bcbc35e45e87d7"
+dependencies = [
+ "byteorder",
+ "cipher",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2022,6 +2032,12 @@ checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
 name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
+
+[[package]]
+name = "md5"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
@@ -2140,6 +2156,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64",
+ "blowfish",
+ "cbc",
  "clap",
  "cpal",
  "crossbeam-channel",
@@ -2150,6 +2168,7 @@ dependencies = [
  "global-hotkey",
  "hex",
  "keyring",
+ "md5 0.7.0",
  "rand_core 0.6.4",
  "ratatui",
  "reqwest",
@@ -4830,7 +4849,7 @@ dependencies = [
  "base64",
  "chrono",
  "hmac",
- "md5",
+ "md5 0.8.1",
  "reqwest",
  "serde",
  "serde-xml-rs",

@@ -1,9 +1,22 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
-use reqwest::{Client, header::COOKIE};
+use blowfish::Blowfish;
+use cbc::{
+    Decryptor,
+    cipher::{BlockDecryptMut, KeyIvInit, block_padding::NoPadding},
+};
+use reqwest::{
+    Client,
+    header::{COOKIE, USER_AGENT},
+};
 use serde::Deserialize;
+use serde_json::{Value, json};
 use url::Url;
 
 use crate::{
@@ -13,6 +26,11 @@ use crate::{
 
 const API: &str = "https://api.deezer.com";
 const PAGE_SIZE: usize = 50;
+const GATEWAY: &str = "https://www.deezer.com/ajax/gw-light.php";
+const MEDIA: &str = "https://media.deezer.com/v1/get_url";
+const BF_SECRET: &[u8; 16] = b"g4el58wc0zvf9na1";
+const BF_IV: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+const ENCRYPTED_CHUNK: usize = 2048;
 
 pub struct DeezerProvider {
     http: Client,
@@ -50,6 +68,116 @@ impl DeezerProvider {
 
     async fn playlist_page(&self, url: Url) -> Result<ApiPage<ApiTrack>> {
         self.get(url).await
+    }
+
+    async fn gateway(&self, method: &str, token: &str, params: Value) -> Result<Value> {
+        let mut url = Url::parse(GATEWAY)?;
+        url.query_pairs_mut()
+            .append_pair("api_version", "1.0")
+            .append_pair("api_token", if token.is_empty() { "null" } else { token })
+            .append_pair("input", "3")
+            .append_pair("method", method);
+        let payload = self
+            .http
+            .post(url)
+            .header(COOKIE, format!("arl={}", self.arl))
+            .json(&params)
+            .send()
+            .await
+            .context("Deezer gateway не ответил")?
+            .error_for_status()
+            .context("Deezer gateway отклонил запрос")?
+            .json::<Value>()
+            .await
+            .context("Deezer gateway вернул непонятный JSON")?;
+        if payload.get("error").is_some_and(gateway_has_error) {
+            bail!("Deezer gateway: {}", payload["error"])
+        }
+        Ok(payload)
+    }
+
+    async fn prepare_full_track(&self, track_id: &str) -> Result<PathBuf> {
+        let cached_mp3 = deezer_cache_dir().join(format!("{track_id}.mp3"));
+        let cached_flac = deezer_cache_dir().join(format!("{track_id}.flac"));
+        if cached_mp3
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 0)
+        {
+            return Ok(cached_mp3);
+        }
+        if cached_flac
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 0)
+        {
+            return Ok(cached_flac);
+        }
+        let user = self.gateway("deezer.getUserData", "", json!({})).await?;
+        let token = text_at(&user, &["results", "checkForm"])
+            .context("ARL не авторизован: Deezer не выдал checkForm")?;
+        let license = text_at(&user, &["results", "USER", "OPTIONS", "license_token"])
+            .context("ARL не авторизован: Deezer не выдал license_token")?;
+        let raw = self
+            .gateway("song.getListData", token, json!({ "SNG_IDS": [track_id] }))
+            .await?;
+        let song = raw
+            .pointer("/results/data/0")
+            .context("Deezer не вернул метаданные полного трека")?;
+        let track_token =
+            text_at(song, &["TRACK_TOKEN"]).context("Deezer не вернул TRACK_TOKEN")?;
+        let (media_url, extension) = self.resolve_media(license, track_token).await?;
+        let bytes = self
+            .http
+            .get(media_url)
+            .header(USER_AGENT, format!("noverplay-tui/{}", crate::APP_VERSION))
+            .send()
+            .await
+            .context("не удалось скачать полный трек Deezer")?
+            .error_for_status()
+            .context("Deezer CDN отклонил полный трек")?
+            .bytes()
+            .await
+            .context("не удалось прочитать полный трек Deezer")?;
+        let decrypted = decrypt_audio(&bytes, track_id)?;
+        let path = deezer_cache_dir().join(format!("{track_id}.{extension}"));
+        write_cache(&path, &decrypted)?;
+        Ok(path)
+    }
+
+    async fn resolve_media(
+        &self,
+        license: &str,
+        track_token: &str,
+    ) -> Result<(String, &'static str)> {
+        for (format, extension) in [("MP3_320", "mp3"), ("MP3_128", "mp3"), ("FLAC", "flac")] {
+            let payload = self
+                .http
+                .post(MEDIA)
+                .json(&json!({
+                    "license_token": license,
+                    "media": [{ "type": "FULL", "formats": [{
+                        "cipher": "BF_CBC_STRIPE", "format": format
+                    }]}],
+                    "track_tokens": [track_token]
+                }))
+                .send()
+                .await
+                .context("Deezer media API не ответил")?;
+            if !payload.status().is_success() {
+                continue;
+            }
+            let value = payload
+                .json::<Value>()
+                .await
+                .context("повреждённый ответ Deezer media API")?;
+            if let Some(url) = value
+                .pointer("/data/0/media/0/sources/0/url")
+                .and_then(Value::as_str)
+                && !url.trim().is_empty()
+            {
+                return Ok((url.to_string(), extension));
+            }
+        }
+        bail!("Deezer не выдал полный поток для этого ARL/трека")
     }
 }
 
@@ -124,25 +252,92 @@ impl MusicProvider for DeezerProvider {
     }
 
     async fn playback_source(&self, track: &TrackRef) -> Result<PlaybackSource> {
-        if !track.capability.can_play() {
-            bail!("Deezer-трек помечен как недоступный")
-        }
-        let details: ApiTrack = self
-            .get(Url::parse(&format!("{API}/track/{}", track.id))?)
-            .await?;
-        let preview = details
-            .preview
-            .filter(|value| !value.trim().is_empty())
-            .context("Deezer не дал официальный preview; полный поток защищён DRM")?;
-        Ok(PlaybackSource {
-            url: Url::parse(&preview).context("Deezer вернул повреждённый preview URL")?,
-            headers: BTreeMap::new(),
-            mime_type: Some("audio/mpeg".to_string()),
-            supports_range: true,
-            expires_at_ms: None,
-            capability: PlaybackCapability::Preview { seconds: 30 },
-        })
+        let path = self.prepare_full_track(&track.id).await?;
+        full_cache_source(&path)
     }
+}
+
+fn gateway_has_error(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(items) => !items.is_empty(),
+        _ => false,
+    }
+}
+
+fn text_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
+    path.iter()
+        .try_fold(value, |current, key| current.get(*key))?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn decrypt_audio(encrypted: &[u8], track_id: &str) -> Result<Vec<u8>> {
+    let key = blowfish_key(track_id);
+    let mut output = Vec::with_capacity(encrypted.len());
+    for (index, chunk) in encrypted.chunks(ENCRYPTED_CHUNK).enumerate() {
+        if chunk.len() == ENCRYPTED_CHUNK && index % 3 == 0 {
+            let mut buffer = chunk.to_vec();
+            let decryptor = Decryptor::<Blowfish>::new_from_slices(&key, &BF_IV)
+                .map_err(|error| anyhow::anyhow!("Deezer Blowfish init: {error}"))?;
+            let decoded = decryptor
+                .decrypt_padded_mut::<NoPadding>(&mut buffer)
+                .map_err(|error| anyhow::anyhow!("Deezer Blowfish decrypt: {error}"))?;
+            output.extend_from_slice(decoded);
+        } else {
+            output.extend_from_slice(chunk);
+        }
+    }
+    Ok(output)
+}
+
+fn blowfish_key(track_id: &str) -> [u8; 16] {
+    let digest = format!("{:x}", md5::compute(track_id.as_bytes()));
+    let bytes = digest.as_bytes();
+    let mut key = [0; 16];
+    for index in 0..16 {
+        key[index] = bytes[index] ^ bytes[index + 16] ^ BF_SECRET[index];
+    }
+    key
+}
+
+fn deezer_cache_dir() -> PathBuf {
+    std::env::temp_dir().join("noverplay").join("deezer-cache")
+}
+
+fn write_cache(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().context("повреждённый путь кэша Deezer")?;
+    fs::create_dir_all(parent).context("не удалось создать кэш Deezer")?;
+    let temporary = path.with_extension("part");
+    fs::write(&temporary, bytes).context("не удалось записать кэш Deezer")?;
+    if path.exists() {
+        fs::remove_file(path).context("не удалось обновить кэш Deezer")?;
+    }
+    fs::rename(temporary, path).context("не удалось завершить кэш Deezer")
+}
+
+fn full_cache_source(path: &Path) -> Result<PlaybackSource> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("mp3");
+    Ok(PlaybackSource {
+        url: Url::from_file_path(path)
+            .map_err(|_| anyhow::anyhow!("повреждённый путь кэша Deezer"))?,
+        headers: BTreeMap::new(),
+        mime_type: Some(
+            if extension.eq_ignore_ascii_case("flac") {
+                "audio/flac"
+            } else {
+                "audio/mpeg"
+            }
+            .to_string(),
+        ),
+        supports_range: true,
+        expires_at_ms: None,
+        capability: PlaybackCapability::Full,
+    })
 }
 
 fn normalize_arl(value: &str) -> String {
@@ -176,10 +371,6 @@ fn entity_id(url: &Url, kind: &str) -> Option<String> {
 
 fn map_track(track: ApiTrack) -> Option<TrackRef> {
     let id = track.id?.to_string();
-    let preview_available = track
-        .preview
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty());
     Some(TrackRef {
         provider: ProviderKind::Deezer,
         id: id.clone(),
@@ -198,13 +389,7 @@ fn map_track(track: ApiTrack) -> Option<TrackRef> {
             .link
             .and_then(|url| Url::parse(&url).ok())
             .unwrap_or_else(|| Url::parse(&format!("https://www.deezer.com/track/{id}")).unwrap()),
-        capability: if preview_available {
-            PlaybackCapability::Preview { seconds: 30 }
-        } else {
-            PlaybackCapability::Unavailable {
-                reason: "полный поток Deezer защищён DRM".to_string(),
-            }
-        },
+        capability: PlaybackCapability::Full,
         genres: Vec::new(),
         explicit: track.explicit_lyrics.unwrap_or(false),
         drm: true,
@@ -237,7 +422,6 @@ struct ApiTrack {
     title: Option<String>,
     duration: Option<u64>,
     link: Option<String>,
-    preview: Option<String>,
     explicit_lyrics: Option<bool>,
     artist: Option<ApiArtist>,
     album: Option<ApiAlbum>,
@@ -262,6 +446,15 @@ mod tests {
     fn arl_accepts_raw_value_and_cookie_header() {
         assert_eq!(normalize_arl("token"), "token");
         assert_eq!(normalize_arl("Cookie: foo=1; arl='token'; path=/"), "token");
+    }
+
+    #[test]
+    fn full_cache_source_is_not_downgraded_to_preview() {
+        let path = std::path::Path::new("C:/cache/deezer-track.mp3");
+        let source = full_cache_source(path).unwrap();
+        assert_eq!(source.capability, PlaybackCapability::Full);
+        assert_eq!(source.mime_type.as_deref(), Some("audio/mpeg"));
+        assert_eq!(source.url.scheme(), "file");
     }
 
     #[test]

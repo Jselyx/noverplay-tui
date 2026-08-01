@@ -14,6 +14,23 @@ pub(super) struct OpenedMedia {
 }
 
 pub(super) fn open_media(source: &PlaybackSource, position_ms: u64) -> Result<OpenedMedia> {
+    if source.url.scheme() == "file" {
+        let path = source
+            .url
+            .to_file_path()
+            .map_err(|_| anyhow::anyhow!("повреждённый локальный аудиопуть"))?;
+        let file = std::fs::File::open(&path)?;
+        return Ok(OpenedMedia {
+            source: Box::new(file),
+            extension: path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_string),
+            mime_type: source.mime_type.clone(),
+            seek_in_format: position_ms > 0,
+            discard_ms: 0,
+        });
+    }
     if is_hls(source) {
         let hls = HlsSource::open(&source.url, &source.headers, position_ms)?;
         let discard_ms = position_ms.saturating_sub(hls.start_ms());
