@@ -8,6 +8,7 @@ pub mod config;
 pub mod credentials;
 pub mod effect;
 pub mod event;
+pub mod hotkeys;
 pub mod importer;
 pub mod model;
 pub mod onboarding;

@@ -6,6 +6,7 @@ use noverplay_tui::{
     cli::{Cli, run_command},
     config::{AppConfig, AppPaths},
     event::EventPump,
+    hotkeys::GlobalHotkeys,
     runtime::Runtime,
     secrets::SecretStore,
     storage::Storage,
@@ -56,9 +57,20 @@ async fn run_tui() -> Result<()> {
     app.restore_account();
     let mut terminal = TerminalGuard::enter()?;
     let mut events = EventPump::with_frame_limit(config.frame_limit);
+    let hotkeys = match GlobalHotkeys::new(&config) {
+        Ok(value) => value,
+        Err(error) => {
+            app.status_message = format!("Глобальные хоткеи выключены: {error}");
+            None
+        }
+    };
 
     while !app.should_quit {
+        if let Some(action) = hotkeys.as_ref().and_then(GlobalHotkeys::try_action) {
+            app.handle(action);
+        }
         drive_runtime(&mut app, &mut runtime);
+        app.show_keybindings_notice_if_needed();
         if app.dirty {
             terminal
                 .terminal_mut()
@@ -71,6 +83,7 @@ async fn run_tui() -> Result<()> {
         let action = events
             .next(
                 search_mode,
+                app.search_input_focused,
                 app.modal.is_some(),
                 app.text_modal_open(),
                 search_has_results,
@@ -99,6 +112,10 @@ async fn run_tui() -> Result<()> {
             config.volume_percent = app.player.volume_percent;
             config.soundcloud_enabled = app.soundcloud_enabled;
             config.yandex_enabled = app.yandex_enabled;
+            config.deezer_enabled = app.deezer_enabled;
+            config.global_hotkeys_enabled = app.global_hotkeys_enabled;
+            config.hotkeys = app.hotkeys.clone();
+            config.keybindings_notice_seen = app.keybindings_notice_seen;
             config.guest_mode = app.account.user().is_none();
             config.soundcloud_client_id_refresh_at_ms = app.soundcloud_refresh_at_ms;
             config.save(&paths)?;

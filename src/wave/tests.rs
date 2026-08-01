@@ -327,6 +327,7 @@ fn track(id: &str, artist: &str) -> TrackRef {
         capability: PlaybackCapability::Full,
         genres: Vec::new(),
         explicit: false,
+        drm: false,
     }
 }
 

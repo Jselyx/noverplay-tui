@@ -10,11 +10,12 @@ use crate::{
     },
     action::Action,
     command_palette::{CommandPalette, PaletteCommand},
-    config::AppConfig,
+    config::{AppConfig, HotkeyBindings},
     credentials::{CredentialEditor, CredentialKind, CredentialState},
     effect::AppEffect,
+    hotkeys::{HotkeyAction, HotkeyEditor},
     importer::PlaylistImportEditor,
-    model::{Playlist, RepeatMode, TrackRef},
+    model::{Playlist, RepeatMode, SearchProvider, TrackRef},
     onboarding::{AccountMode, OnboardingCommand, OnboardingResult, OnboardingState},
     storage::{QueueSnapshot, Storage},
 };
@@ -112,7 +113,9 @@ pub enum Modal {
     PlaylistImport(Box<PlaylistImportEditor>),
     Account(Box<AccountDialog>),
     Help,
+    Keybindings,
     CommandPalette(Box<CommandPalette>),
+    Hotkey(Box<HotkeyEditor>),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -131,7 +134,10 @@ pub struct App {
     pub screen: Screen,
     pub selected: usize,
     pub search_query: String,
+    pub search_input_focused: bool,
+    pub search_provider: SearchProvider,
     pub search_results: Vec<TrackRef>,
+    pub home_tracks: Vec<TrackRef>,
     pub wave_tracks: Vec<TrackRef>,
     pub wave_loading: bool,
     pub library: Vec<TrackRef>,
@@ -147,6 +153,10 @@ pub struct App {
     pub soundcloud_refresh_at_ms: Option<i64>,
     pub soundcloud_enabled: bool,
     pub yandex_enabled: bool,
+    pub deezer_enabled: bool,
+    pub global_hotkeys_enabled: bool,
+    pub hotkeys: HotkeyBindings,
+    pub keybindings_notice_seen: bool,
     pub modal: Option<Modal>,
     pub should_quit: bool,
     pub dirty: bool,
@@ -175,7 +185,14 @@ impl App {
             screen: Screen::Home,
             selected: 0,
             search_query: String::new(),
+            search_input_focused: true,
+            search_provider: SearchProvider::All,
             search_results: Vec::new(),
+            home_tracks: storage
+                .recent_history(24)?
+                .into_iter()
+                .map(|entry| entry.track)
+                .collect(),
             wave_tracks: Vec::new(),
             wave_loading: false,
             library: storage.library_tracks()?,
@@ -200,6 +217,10 @@ impl App {
             soundcloud_refresh_at_ms: config.soundcloud_client_id_refresh_at_ms,
             soundcloud_enabled: config.soundcloud_enabled,
             yandex_enabled: config.yandex_enabled,
+            deezer_enabled: config.deezer_enabled,
+            global_hotkeys_enabled: config.global_hotkeys_enabled,
+            hotkeys: config.hotkeys.clone(),
+            keybindings_notice_seen: config.keybindings_notice_seen,
             modal: (!config.onboarding_completed).then(|| {
                 Modal::Onboarding(Box::new(OnboardingState::with_audio_outputs(
                     config.audio_output.clone(),
@@ -292,7 +313,21 @@ impl App {
             Action::ToggleLike => self.toggle_like(),
             Action::StartSearch => {
                 self.screen = Screen::Search;
+                self.search_input_focused = true;
                 self.selected = 0;
+            }
+            Action::ToggleSearchFocus => {
+                self.search_input_focused = !self.search_input_focused;
+                self.status_message = if self.search_input_focused {
+                    "Ввод запроса · Ctrl+J к результатам".to_string()
+                } else {
+                    "Навигация по результатам · / вернуться к вводу".to_string()
+                };
+            }
+            Action::FocusSearchInput => self.search_input_focused = true,
+            Action::CycleSearchProvider => {
+                self.search_provider = self.search_provider.next();
+                self.schedule_search(false);
             }
             Action::SearchInput(value) => {
                 self.search_query.push(value);
@@ -309,6 +344,7 @@ impl App {
                     let query = self.search_query.trim().to_string();
                     self.effects.push(AppEffect::Search {
                         query: query.clone(),
+                        provider: self.search_provider,
                         immediate: true,
                     });
                     format!("Ищем: {query}")
@@ -354,10 +390,12 @@ impl App {
                 self.status_message = format!("Не удалось включить трек: {error}");
             }
             Action::OpenHelp => self.modal = Some(Modal::Help),
+            Action::OpenKeybindings => self.modal = Some(Modal::Keybindings),
             Action::OpenCommandPalette => self.modal = Some(Modal::CommandPalette(Box::default())),
             Action::OpenPlaylistImport => {
                 self.modal = Some(Modal::PlaylistImport(Box::default()));
-                self.status_message = "Вставь ссылку на плейлист SoundCloud или Yandex".to_string();
+                self.status_message =
+                    "Вставь ссылку на плейлист SoundCloud, Yandex или Deezer".to_string();
             }
             Action::OpenAccount(action) => {
                 self.modal = Some(Modal::Account(Box::new(AccountDialog::new(action))));
@@ -452,7 +490,12 @@ impl App {
     pub fn text_modal_open(&self) -> bool {
         matches!(
             self.modal,
-            Some(Modal::Credential(_) | Modal::PlaylistImport(_) | Modal::Account(_))
+            Some(
+                Modal::Credential(_)
+                    | Modal::PlaylistImport(_)
+                    | Modal::Account(_)
+                    | Modal::Hotkey(_)
+            )
         )
     }
 
@@ -467,6 +510,14 @@ impl App {
         self.onboarding_result.take()
     }
 
+    pub fn show_keybindings_notice_if_needed(&mut self) {
+        if !self.keybindings_notice_seen && self.modal.is_none() {
+            self.modal = Some(Modal::Keybindings);
+            self.status_message = "Кейбинды всегда можно открыть через Ctrl+9".to_string();
+            self.dirty = true;
+        }
+    }
+
     pub fn set_credentials(&mut self, credentials: CredentialState) {
         self.credentials = credentials;
         self.dirty = true;
@@ -476,7 +527,9 @@ impl App {
         match self.screen {
             Screen::Search => &self.search_results,
             Screen::Wave => &self.wave_tracks,
-            Screen::Library | Screen::Home => &self.library,
+            Screen::Library => &self.library,
+            Screen::Home if !self.home_tracks.is_empty() => &self.home_tracks,
+            Screen::Home => &self.library,
             Screen::Queue => &self.queue,
             Screen::Playlists => self
                 .active_playlist
@@ -494,7 +547,7 @@ impl App {
                 .and_then(|id| self.playlists.iter().find(|playlist| playlist.id == id))
                 .map(|playlist| playlist.tracks.len())
                 .unwrap_or(self.playlists.len()),
-            Screen::Settings => CredentialKind::ALL.len(),
+            Screen::Settings => CredentialKind::ALL.len() + 1 + HotkeyAction::ALL.len(),
             Screen::Profile => 1,
             _ => self.selected_tracks().len(),
         }
@@ -509,7 +562,11 @@ impl App {
         if query.is_empty() {
             self.status_message = "Введите запрос".to_string();
         }
-        self.effects.push(AppEffect::Search { query, immediate });
+        self.effects.push(AppEffect::Search {
+            query,
+            provider: self.search_provider,
+            immediate,
+        });
     }
 
     fn finish_search(&mut self, query: String, tracks: Vec<TrackRef>, failures: Vec<String>) {
@@ -590,6 +647,19 @@ impl App {
             if let Some(kind) = CredentialKind::ALL.get(self.selected).copied() {
                 self.modal = Some(Modal::Credential(Box::new(CredentialEditor::new(kind))));
                 self.status_message = format!("Введи новый {}", kind.label());
+            } else if self.selected == CredentialKind::ALL.len() {
+                self.global_hotkeys_enabled = !self.global_hotkeys_enabled;
+                self.config_dirty = true;
+                self.status_message = "Настройка хоткеев применится после перезапуска".to_string();
+            } else if let Some(action) = HotkeyAction::ALL
+                .get(self.selected.saturating_sub(CredentialKind::ALL.len() + 1))
+                .copied()
+            {
+                self.modal = Some(Modal::Hotkey(Box::new(HotkeyEditor {
+                    action,
+                    value: action.value(&self.hotkeys).to_string(),
+                })));
+                self.status_message = format!("Введи комбинацию для {}", action.label());
             }
             return;
         }
@@ -755,6 +825,19 @@ impl App {
                 self.modal = None;
                 self.run_palette_command(command);
             }
+            Some(Modal::Hotkey(editor)) => {
+                if crate::hotkeys::validate_binding(&editor.value).is_err() {
+                    self.status_message =
+                        "Формат: Ctrl+Alt+P, Ctrl+Alt+Space или Ctrl+Alt+Right".to_string();
+                    return;
+                }
+                editor
+                    .action
+                    .set(&mut self.hotkeys, editor.value.trim().to_string());
+                self.config_dirty = true;
+                self.modal = None;
+                self.status_message = "Хоткей сохранён; применится после перезапуска".to_string();
+            }
             _ => self.close_modal(),
         }
     }
@@ -805,7 +888,8 @@ impl App {
             }
             PaletteCommand::ImportPlaylist => {
                 self.modal = Some(Modal::PlaylistImport(Box::default()));
-                self.status_message = "Вставь ссылку на плейлист SoundCloud или Yandex".to_string();
+                self.status_message =
+                    "Вставь ссылку на плейлист SoundCloud, Yandex или Deezer".to_string();
             }
             PaletteCommand::Profile => {
                 self.screen = Screen::Profile;
@@ -828,6 +912,7 @@ impl App {
             Some(Modal::Credential(editor)) => editor.input(value),
             Some(Modal::PlaylistImport(editor)) => editor.input(value),
             Some(Modal::Account(dialog)) => dialog.input(value),
+            Some(Modal::Hotkey(editor)) => editor.input(value),
             _ => {}
         }
     }
@@ -838,6 +923,7 @@ impl App {
             Some(Modal::Credential(editor)) => editor.backspace(),
             Some(Modal::PlaylistImport(editor)) => editor.backspace(),
             Some(Modal::Account(dialog)) => dialog.backspace(),
+            Some(Modal::Hotkey(editor)) => editor.backspace(),
             _ => {}
         }
     }
@@ -849,6 +935,7 @@ impl App {
                 match kind {
                     CredentialKind::SoundCloudClientId => self.soundcloud_enabled = true,
                     CredentialKind::YandexToken => self.yandex_enabled = true,
+                    CredentialKind::DeezerArl => self.deezer_enabled = true,
                 }
                 self.config_dirty = true;
                 self.modal = None;
@@ -1144,6 +1231,10 @@ impl App {
     }
 
     fn close_modal(&mut self) {
+        if matches!(self.modal, Some(Modal::Keybindings)) {
+            self.keybindings_notice_seen = true;
+            self.config_dirty = true;
+        }
         if matches!(self.modal, Some(Modal::Account(_)))
             && let Some(mut state) = self.onboarding_resume.take()
         {
@@ -1218,6 +1309,29 @@ mod tests {
     }
 
     #[test]
+    fn first_run_keybindings_notice_is_shown_once_and_acknowledged() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(
+            &storage,
+            &AppConfig {
+                onboarding_completed: true,
+                keybindings_notice_seen: false,
+                ..AppConfig::default()
+            },
+        )
+        .unwrap();
+        app.show_keybindings_notice_if_needed();
+        assert!(matches!(app.modal, Some(Modal::Keybindings)));
+        app.handle(Action::CloseModal);
+        assert!(app.keybindings_notice_seen);
+        assert!(app.config_dirty);
+        app.show_keybindings_notice_if_needed();
+        assert!(app.modal.is_none());
+    }
+
+    #[test]
     fn activating_track_emits_play_effect() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::new(temp.path().join("db.sqlite3"));
@@ -1242,9 +1356,56 @@ mod tests {
             app.take_effects(),
             vec![AppEffect::Search {
                 query: "winter mix".to_string(),
+                provider: SearchProvider::All,
                 immediate: true
             }]
         );
+    }
+
+    #[test]
+    fn search_provider_is_part_of_the_effect_and_tab_cycle_resubmits() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        app.search_query = "ambient".to_string();
+        app.handle(Action::CycleSearchProvider);
+        assert_eq!(
+            app.search_provider,
+            crate::model::SearchProvider::SoundCloud
+        );
+        assert!(matches!(
+            app.take_effects().as_slice(),
+            [AppEffect::Search {
+                provider: crate::model::SearchProvider::SoundCloud,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn home_prefers_recent_history_and_library_is_still_the_full_favorites_list() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let favorite = test_track();
+        storage.like_track(&favorite, 1).unwrap();
+        let recent = TrackRef {
+            id: "recent".to_string(),
+            ..test_track()
+        };
+        storage
+            .record_history(&crate::storage::HistoryEntry {
+                track: recent.clone(),
+                played_at_ms: 2,
+                completed: true,
+                skipped: false,
+            })
+            .unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        assert_eq!(app.selected_tracks(), [recent]);
+        app.handle(Action::Navigate(Screen::Library));
+        assert_eq!(app.selected_tracks(), [favorite]);
     }
 
     #[test]
@@ -1650,6 +1811,7 @@ mod tests {
             capability: PlaybackCapability::Full,
             genres: Vec::new(),
             explicit: false,
+            drm: false,
         }
     }
 }

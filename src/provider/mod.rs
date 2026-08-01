@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use url::Url;
 
-use crate::model::{PlaybackSource, Playlist, ProviderKind, TrackRef};
+use crate::model::{PlaybackSource, Playlist, ProviderKind, SearchProvider, TrackRef};
 
 pub mod deezer;
 pub mod soundcloud;
@@ -76,8 +76,20 @@ impl ProviderRegistry {
     }
 
     pub async fn search_all(&self, query: &str) -> Vec<(ProviderKind, Result<SearchPage>)> {
+        self.search(query, SearchProvider::All).await
+    }
+
+    pub async fn search(
+        &self,
+        query: &str,
+        selection: SearchProvider,
+    ) -> Vec<(ProviderKind, Result<SearchPage>)> {
         let mut pending = FuturesUnordered::new();
-        for provider in self.providers.values() {
+        for provider in self.providers.values().filter(|provider| {
+            selection
+                .provider()
+                .is_none_or(|kind| kind == provider.kind())
+        }) {
             let query = query.to_string();
             pending.push(async move {
                 let kind = provider.kind();
@@ -182,6 +194,7 @@ mod tests {
             capability: PlaybackCapability::Full,
             genres: Vec::new(),
             explicit: false,
+            drm: false,
         }
     }
 

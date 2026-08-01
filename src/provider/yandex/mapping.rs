@@ -51,6 +51,7 @@ pub fn normalizovat_track(track: Track) -> Option<TrackRef> {
         capability,
         genres,
         explicit: track.explicit.unwrap_or(false),
+        drm: false,
     })
 }
 

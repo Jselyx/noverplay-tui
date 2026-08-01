@@ -32,6 +32,7 @@ impl EventPump {
     pub async fn next(
         &mut self,
         search_mode: bool,
+        search_input_focused: bool,
         modal_open: bool,
         text_modal: bool,
         search_has_results: bool,
@@ -41,7 +42,7 @@ impl EventPump {
             event = self.terminal.next() => {
                 match event {
                     Some(Ok(CrosstermEvent::Key(key))) if key.is_press() => {
-                        map_key(key, search_mode, modal_open, text_modal, search_has_results)
+                        map_key(key, search_mode, search_input_focused, modal_open, text_modal, search_has_results)
                     }
                     Some(Ok(CrosstermEvent::Resize(width, height))) => {
                         self.terminal_size = (width, height);
@@ -74,11 +75,15 @@ impl Default for EventPump {
 fn map_key(
     key: KeyEvent,
     search_mode: bool,
+    search_input_focused: bool,
     modal_open: bool,
     text_modal: bool,
-    search_has_results: bool,
+    _search_has_results: bool,
 ) -> Action {
     // да тут много клавиш, терминал сам их телепатией не распарсит АЛЛООООО 🤡
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('9') {
+        return Action::OpenKeybindings;
+    }
     if modal_open {
         if text_modal {
             return match key.code {
@@ -107,9 +112,35 @@ fn map_key(
         return Action::OpenCommandPalette;
     }
     if search_mode {
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            return match key.code {
+                KeyCode::Char('1') => Action::Navigate(Screen::Home),
+                KeyCode::Char('2') => Action::Navigate(Screen::Wave),
+                KeyCode::Char('3') => Action::Navigate(Screen::Search),
+                KeyCode::Char('4') => Action::Navigate(Screen::Library),
+                KeyCode::Char('5') => Action::Navigate(Screen::Playlists),
+                KeyCode::Char('6') => Action::Navigate(Screen::Queue),
+                KeyCode::Char('7') => Action::Navigate(Screen::Profile),
+                KeyCode::Char('8') => Action::Navigate(Screen::Settings),
+                _ => Action::Resize,
+            };
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('j') {
+            return Action::ToggleSearchFocus;
+        }
+        if key.code == KeyCode::Tab {
+            return Action::CycleSearchProvider;
+        }
+        if !search_input_focused {
+            return match key.code {
+                KeyCode::Char('/') => Action::FocusSearchInput,
+                KeyCode::Enter => Action::Activate,
+                KeyCode::Up | KeyCode::Char('k') => Action::SelectPrevious,
+                KeyCode::Down | KeyCode::Char('j') => Action::SelectNext,
+                _ => Action::Resize,
+            };
+        }
         return match key.code {
-            KeyCode::Esc => Action::Navigate(Screen::Home),
-            KeyCode::Enter if search_has_results => Action::Activate,
             KeyCode::Enter => Action::SubmitSearch,
             KeyCode::Backspace => Action::SearchBackspace,
             KeyCode::Up => Action::SelectPrevious,
@@ -157,10 +188,59 @@ mod tests {
     #[test]
     fn enter_activates_ready_search_result() {
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(map_key(key, true, false, false, true), Action::Activate);
         assert_eq!(
-            map_key(key, true, false, false, false),
+            map_key(key, true, false, false, false, true),
+            Action::Activate
+        );
+        assert_eq!(
+            map_key(key, true, true, false, false, false),
             Action::SubmitSearch
+        );
+    }
+
+    #[test]
+    fn search_can_switch_between_typing_and_navigation_without_escape() {
+        let toggle = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        assert_eq!(
+            map_key(toggle, true, true, false, false, true),
+            Action::ToggleSearchFocus
+        );
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+                true,
+                false,
+                false,
+                false,
+                true,
+            ),
+            Action::FocusSearchInput
+        );
+    }
+
+    #[test]
+    fn tab_cycles_search_provider_and_alt_number_navigates_away() {
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+                true,
+                true,
+                false,
+                false,
+                false,
+            ),
+            Action::CycleSearchProvider
+        );
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT),
+                true,
+                true,
+                false,
+                false,
+                false,
+            ),
+            Action::Navigate(Screen::Library)
         );
     }
 
@@ -168,8 +248,21 @@ mod tests {
     fn command_palette_survives_search_input_mode() {
         let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
         assert_eq!(
-            map_key(key, true, false, false, false),
+            map_key(key, true, true, false, false, false),
             Action::OpenCommandPalette
+        );
+    }
+
+    #[test]
+    fn ctrl_nine_opens_keybindings_from_any_regular_screen() {
+        let key = KeyEvent::new(KeyCode::Char('9'), KeyModifiers::CONTROL);
+        assert_eq!(
+            map_key(key, false, false, false, false, false),
+            Action::OpenKeybindings
+        );
+        assert_eq!(
+            map_key(key, true, true, false, false, false),
+            Action::OpenKeybindings
         );
     }
 
@@ -178,6 +271,7 @@ mod tests {
         assert_eq!(
             map_key(
                 KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                false,
                 false,
                 true,
                 false,
@@ -188,6 +282,7 @@ mod tests {
         assert_eq!(
             map_key(
                 KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
+                false,
                 false,
                 true,
                 false,
@@ -204,6 +299,7 @@ mod tests {
                 map_key(
                     KeyEvent::new(KeyCode::Char(value), KeyModifiers::NONE),
                     false,
+                    false,
                     true,
                     true,
                     false,
@@ -218,6 +314,7 @@ mod tests {
         assert_eq!(
             map_key(
                 KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE),
+                false,
                 false,
                 true,
                 true,

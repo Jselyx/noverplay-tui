@@ -438,6 +438,7 @@ mod tests {
             capability: PlaybackCapability::Full,
             genres: vec!["test".to_string()],
             explicit: false,
+            drm: false,
         }
     }
 

@@ -1,6 +1,9 @@
 use crate::{
     config::AppConfig,
-    provider::{ProviderRegistry, soundcloud::SoundCloudProvider, yandex::YandexProvider},
+    provider::{
+        ProviderRegistry, deezer::DeezerProvider, soundcloud::SoundCloudProvider,
+        yandex::YandexProvider,
+    },
     secrets::{SecretKey, SecretStore},
 };
 
@@ -34,6 +37,16 @@ pub(super) fn build_registry(config: &AppConfig, secrets: &SecretStore) -> Provi
         match YandexProvider::new(token) {
             Ok(provider) => registry.register(provider),
             Err(error) => notices.push(format!("Yandex Music не настроен: {error}")),
+        }
+    }
+
+    if config.deezer_enabled
+        && let Some(arl) = load_secret(secrets, SecretKey::DeezerArl, &mut notices)
+            .filter(|value| !value.trim().is_empty())
+    {
+        match DeezerProvider::new(arl) {
+            Ok(provider) => registry.register(provider),
+            Err(error) => notices.push(format!("Deezer не настроен: {error}")),
         }
     }
 

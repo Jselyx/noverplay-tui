@@ -117,7 +117,12 @@ fn draw_screen(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ])
         .split(area);
     let title = if app.screen == Screen::Search {
-        format!(" Поиск  / {}_ ", app.search_query)
+        format!(
+            " Поиск  [{}]  {}{}  · Tab площадка · Ctrl+J ввод/список · Alt+1..8 раздел ",
+            app.search_provider.label(),
+            app.search_query,
+            if app.search_input_focused { "_" } else { "" }
+        )
     } else {
         format!(" {}  {} ", app.screen.icon(), app.screen.label())
     };
@@ -208,6 +213,13 @@ fn track_item((index, track): (usize, &TrackRef), liked: bool) -> ListItem<'stat
             Span::raw("     "),
             Span::styled(track.display_artist(), Style::new().fg(MUTED)),
             Span::styled(format!("  ·  {source}"), Style::new().fg(PRIMARY)),
+            Span::styled(
+                track
+                    .protection_badge()
+                    .map(|badge| format!("  [{badge}]"))
+                    .unwrap_or_default(),
+                Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD),
+            ),
         ]),
     ])
 }
@@ -300,7 +312,7 @@ fn draw_profile(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn draw_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let items = crate::credentials::CredentialKind::ALL
+    let mut items = crate::credentials::CredentialKind::ALL
         .iter()
         .map(|kind| {
             let configured = app.credentials.is_configured(*kind);
@@ -315,10 +327,26 @@ fn draw_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ))
         })
         .collect::<Vec<_>>();
+    items.push(ListItem::new(format!(
+        "  {:<24}  {}",
+        "Глобальные хоткеи",
+        if app.global_hotkeys_enabled {
+            "включены"
+        } else {
+            "выключены"
+        }
+    )));
+    items.extend(crate::hotkeys::HotkeyAction::ALL.iter().map(|action| {
+        ListItem::new(format!(
+            "    {:<22}  {}",
+            action.label(),
+            action.value(&app.hotkeys)
+        ))
+    }));
     let mut state = ListState::default().with_selected(Some(app.selected));
     frame.render_stateful_widget(
         List::new(items)
-            .block(Block::new().title(" Сервисы  Enter изменить "))
+            .block(Block::new().title(" Сервисы и хоткеи · Enter изменить "))
             .highlight_symbol(" ▸ ")
             .highlight_style(Style::new().fg(Color::Black).bg(Color::White)),
         area,
@@ -419,6 +447,51 @@ fn draw_modal(frame: &mut Frame<'_>, app: &App, modal: &Modal, area: Rect) {
         command_palette::draw(frame, state, area);
         return;
     }
+    if let Modal::Hotkey(editor) = modal {
+        let popup = centered_rect(64, 32, area);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(format!(
+                "{}\n\n{}\n\nEnter сохранить · Esc отмена",
+                editor.action.label(),
+                editor.value
+            ))
+            .alignment(Alignment::Center)
+            .style(Style::new().fg(Color::White).bg(PANEL))
+            .block(
+                Block::new()
+                    .title(" Глобальный хоткей ")
+                    .borders(Borders::ALL),
+            ),
+            popup,
+        );
+        return;
+    }
+    if matches!(modal, Modal::Keybindings) {
+        let popup = centered_rect(76, 78, area);
+        frame.render_widget(Clear, popup);
+        let globals = crate::hotkeys::HotkeyAction::ALL
+            .iter()
+            .map(|action| format!("{:<24} {}", action.label(), action.value(&app.hotkeys)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = format!(
+            "Все кейбинды\n\nГЛОБАЛЬНЫЕ\n{globals}\n\nTUI\n1–8 разделы       / поиск\nTab площадка      Ctrl+J ввод/список\nAlt+1–8 раздел    ↑↓ / j k выбор\nEnter открыть     f лайк\nSpace пауза       n / p трек\nh / l ±10 сек     + / - громкость\ns shuffle         r repeat\ni импорт          Ctrl+K команды\n? помощь          q выход\n\nCtrl+9 — показать это окно снова\nEsc / Enter — закрыть"
+        );
+        frame.render_widget(
+            Paragraph::new(body)
+                .wrap(Wrap { trim: false })
+                .style(Style::new().fg(Color::White).bg(PANEL))
+                .block(
+                    Block::new()
+                        .title(" Кейбинды ")
+                        .borders(Borders::ALL)
+                        .border_style(Style::new().fg(BORDER)),
+                ),
+            popup,
+        );
+        return;
+    }
     let popup = centered_rect(64, 60, area);
     frame.render_widget(Clear, popup);
     let (title, body) = match modal {
@@ -428,9 +501,11 @@ fn draw_modal(frame: &mut Frame<'_>, app: &App, modal: &Modal, area: Rect) {
         Modal::Account(_) => unreachable!(),
         Modal::Help => (
             " Клавиши ",
-            "1-8 разделы    / поиск\ni импорт          f лайк\nEnter открыть или войти\nEsc назад          ↑↓ или jk выбор\nSpace пауза        n/p трек\n←→ или hl ±10 сек  +/- громкость\ns/r режимы         x выйти из аккаунта\nF2 вход/регистрация, Enter CAPTCHA\nq выход",
+            "1-8 разделы    / поиск\ni импорт          f лайк\nПоиск: Tab площадка, Ctrl+J ввод/список\nПоиск: Alt+1..8 уйти без Esc\nEnter открыть или искать\nEsc назад          ↑↓ или jk выбор\nSpace пауза        n/p трек\n←→ или hl ±10 сек  +/- громкость\ns/r режимы         x выйти из аккаунта\nF2 вход/регистрация, Enter CAPTCHA\nq выход",
         ),
+        Modal::Keybindings => unreachable!(),
         Modal::CommandPalette(_) => unreachable!(),
+        Modal::Hotkey(_) => unreachable!(),
     };
     frame.render_widget(
         Paragraph::new(body)
@@ -620,6 +695,20 @@ mod tests {
         let content = terminal.backend().to_string();
         assert!(content.contains("Enter  войти или создать аккаунт"));
         assert!(content.contains("со своим client_id"));
+    }
+
+    #[test]
+    fn keybindings_modal_uses_current_user_bindings() {
+        let (_temp, mut app) = app();
+        app.hotkeys.play_pause = "Ctrl+Shift+P".to_string();
+        app.modal = Some(Modal::Keybindings);
+        let backend = TestBackend::new(100, 32);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let content = terminal.backend().to_string();
+        assert!(content.contains("Ctrl+Shift+P"));
+        assert!(content.contains("Ctrl+9"));
+        assert!(content.contains("Все кейбинды"));
     }
 
     #[test]

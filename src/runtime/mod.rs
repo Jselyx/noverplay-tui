@@ -122,9 +122,11 @@ impl Runtime {
         let mut actions = Vec::new();
         for effect in effects {
             match effect {
-                AppEffect::Search { query, immediate } => {
-                    self.start_search(query, immediate, &mut actions)
-                }
+                AppEffect::Search {
+                    query,
+                    provider,
+                    immediate,
+                } => self.start_search(query, provider, immediate, &mut actions),
                 AppEffect::GenerateWave => self.start_wave(&mut actions),
                 AppEffect::SetLiked { track, liked } => {
                     actions.push(Action::LikeSaved {
@@ -374,6 +376,7 @@ impl Runtime {
                 self.config.soundcloud_client_id_override = None;
             }
             CredentialKind::YandexToken => self.config.yandex_enabled = true,
+            CredentialKind::DeezerArl => self.config.deezer_enabled = true,
         }
         let setup = build_registry(&self.config, &self.secrets);
         self.providers = Arc::new(setup.registry);
@@ -398,7 +401,13 @@ impl Runtime {
         }
     }
 
-    fn start_search(&mut self, query: String, immediate: bool, actions: &mut Vec<Action>) {
+    fn start_search(
+        &mut self,
+        query: String,
+        provider: crate::model::SearchProvider,
+        immediate: bool,
+        actions: &mut Vec<Action>,
+    ) {
         if let Some(task) = self.search_task.take() {
             task.abort();
         }
@@ -431,6 +440,7 @@ impl Runtime {
             self.sender.clone(),
             self.search_generation,
             query,
+            provider,
             delay,
         ));
     }
@@ -781,6 +791,7 @@ mod tests {
         };
         let actions = runtime.dispatch(vec![AppEffect::Search {
             query: String::new(),
+            provider: crate::model::SearchProvider::All,
             immediate: false,
         }]);
         assert!(matches!(
@@ -933,6 +944,7 @@ mod tests {
             capability: crate::model::PlaybackCapability::Full,
             genres: Vec::new(),
             explicit: false,
+            drm: false,
         }
     }
 }

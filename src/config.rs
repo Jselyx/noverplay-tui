@@ -47,6 +47,28 @@ impl AppPaths {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
+pub struct HotkeyBindings {
+    pub play_pause: String,
+    pub next: String,
+    pub previous: String,
+    pub volume_up: String,
+    pub volume_down: String,
+}
+
+impl Default for HotkeyBindings {
+    fn default() -> Self {
+        Self {
+            play_pause: "Ctrl+Alt+Space".to_string(),
+            next: "Ctrl+Alt+Right".to_string(),
+            previous: "Ctrl+Alt+Left".to_string(),
+            volume_up: "Ctrl+Alt+Up".to_string(),
+            volume_down: "Ctrl+Alt+Down".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub server_url: String,
     pub theme: String,
@@ -60,8 +82,12 @@ pub struct AppConfig {
     pub guest_mode: bool,
     pub soundcloud_enabled: bool,
     pub yandex_enabled: bool,
+    pub deezer_enabled: bool,
     pub soundcloud_client_id_override: Option<String>,
     pub soundcloud_client_id_refresh_at_ms: Option<i64>,
+    pub global_hotkeys_enabled: bool,
+    pub hotkeys: HotkeyBindings,
+    pub keybindings_notice_seen: bool,
 }
 
 impl Default for AppConfig {
@@ -79,8 +105,12 @@ impl Default for AppConfig {
             guest_mode: false,
             soundcloud_enabled: true,
             yandex_enabled: true,
+            deezer_enabled: true,
             soundcloud_client_id_override: None,
             soundcloud_client_id_refresh_at_ms: None,
+            global_hotkeys_enabled: false,
+            hotkeys: HotkeyBindings::default(),
+            keybindings_notice_seen: false,
         }
     }
 }
@@ -169,5 +199,25 @@ mod tests {
         }
         .normalized();
         assert_eq!(config.server_url, "https://api.noverplay.space");
+    }
+
+    #[test]
+    fn hotkey_bindings_roundtrip_and_have_cross_platform_defaults() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::from_roots(
+            temp.path().join("config"),
+            temp.path().join("data"),
+            temp.path().join("cache"),
+        );
+        let mut config = AppConfig {
+            global_hotkeys_enabled: true,
+            ..AppConfig::default()
+        };
+        config.hotkeys.play_pause = "Ctrl+Alt+P".to_string();
+        config.save(&paths).unwrap();
+        let loaded = AppConfig::load(&paths).unwrap();
+        assert!(loaded.global_hotkeys_enabled);
+        assert_eq!(loaded.hotkeys.play_pause, "Ctrl+Alt+P");
+        assert!(!loaded.hotkeys.next.trim().is_empty());
     }
 }

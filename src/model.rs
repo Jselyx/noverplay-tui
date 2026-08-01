@@ -6,6 +6,45 @@ use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum SearchProvider {
+    #[default]
+    All,
+    SoundCloud,
+    YandexMusic,
+    Deezer,
+}
+
+impl SearchProvider {
+    pub const fn next(self) -> Self {
+        match self {
+            Self::All => Self::SoundCloud,
+            Self::SoundCloud => Self::YandexMusic,
+            Self::YandexMusic => Self::Deezer,
+            Self::Deezer => Self::All,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::All => "Все",
+            Self::SoundCloud => "SoundCloud",
+            Self::YandexMusic => "Yandex",
+            Self::Deezer => "Deezer",
+        }
+    }
+
+    pub const fn provider(self) -> Option<ProviderKind> {
+        match self {
+            Self::All => None,
+            Self::SoundCloud => Some(ProviderKind::SoundCloud),
+            Self::YandexMusic => Some(ProviderKind::YandexMusic),
+            Self::Deezer => Some(ProviderKind::Deezer),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     #[default]
     SoundCloud,
@@ -71,6 +110,8 @@ pub struct TrackRef {
     pub capability: PlaybackCapability,
     pub genres: Vec<String>,
     pub explicit: bool,
+    #[serde(default)]
+    pub drm: bool,
 }
 
 impl TrackRef {
@@ -86,6 +127,10 @@ impl TrackRef {
             .collect::<Vec<_>>()
             .join("|");
         format!("{}::{artists}", normalizovat_text(&self.title))
+    }
+
+    pub const fn protection_badge(&self) -> Option<&'static str> {
+        if self.drm { Some("DRM") } else { None }
     }
 
     pub fn display_artist(&self) -> String {
@@ -168,6 +213,7 @@ mod tests {
             capability: PlaybackCapability::Full,
             genres: Vec::new(),
             explicit: false,
+            drm: false,
         }
     }
 
@@ -197,5 +243,23 @@ mod tests {
             "Artist"
         )));
         assert!(!playlist.push_unique(track(ProviderKind::Deezer, "2", "song   name", "artist")));
+    }
+
+    #[test]
+    fn search_provider_cycles_all_then_each_platform() {
+        assert_eq!(SearchProvider::All.next(), SearchProvider::SoundCloud);
+        assert_eq!(
+            SearchProvider::SoundCloud.next(),
+            SearchProvider::YandexMusic
+        );
+        assert_eq!(SearchProvider::YandexMusic.next(), SearchProvider::Deezer);
+        assert_eq!(SearchProvider::Deezer.next(), SearchProvider::All);
+    }
+
+    #[test]
+    fn protected_tracks_have_an_explicit_drm_marker() {
+        let mut value = track(ProviderKind::SoundCloud, "1", "Track", "Artist");
+        value.drm = true;
+        assert_eq!(value.protection_badge(), Some("DRM"));
     }
 }

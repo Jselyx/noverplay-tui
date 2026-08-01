@@ -92,6 +92,7 @@ mod tests {
             capability: PlaybackCapability::Full,
             genres: Vec::new(),
             explicit: false,
+            drm: false,
         };
         let tracks = related_tracks(&client, &track, 5).await.unwrap();
         server.join().unwrap();

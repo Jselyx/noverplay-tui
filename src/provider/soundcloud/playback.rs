@@ -208,6 +208,7 @@ mod tests {
             capability,
             genres: Vec::new(),
             explicit: false,
+            drm: false,
         }
     }
 }

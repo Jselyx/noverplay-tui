@@ -6,15 +6,17 @@ use crate::secrets::{SecretKey, SecretStore};
 pub enum CredentialKind {
     SoundCloudClientId,
     YandexToken,
+    DeezerArl,
 }
 
 impl CredentialKind {
-    pub const ALL: [Self; 2] = [Self::SoundCloudClientId, Self::YandexToken];
+    pub const ALL: [Self; 3] = [Self::SoundCloudClientId, Self::YandexToken, Self::DeezerArl];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::SoundCloudClientId => "SoundCloud client_id",
             Self::YandexToken => "Yandex OAuth токен",
+            Self::DeezerArl => "Deezer ARL cookie",
         }
     }
 
@@ -22,6 +24,7 @@ impl CredentialKind {
         match self {
             Self::SoundCloudClientId => SecretKey::SoundCloudClientIdOverride,
             Self::YandexToken => SecretKey::YandexToken,
+            Self::DeezerArl => SecretKey::DeezerArl,
         }
     }
 
@@ -33,6 +36,9 @@ impl CredentialKind {
             Self::YandexToken => {
                 "Вставь OAuth из расширения yandex-music-token, токен останется только локально"
             }
+            Self::DeezerArl => {
+                "Вставь значение cookie arl или строку arl=...; cookie останется только локально"
+            }
         }
     }
 }
@@ -41,6 +47,7 @@ impl CredentialKind {
 pub struct CredentialState {
     pub soundcloud: bool,
     pub yandex: bool,
+    pub deezer: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,6 +85,7 @@ impl CredentialState {
             soundcloud: has_value(secrets, SecretKey::SoundCloudClientIdOverride)?
                 || has_value(secrets, SecretKey::SoundCloudClientId)?,
             yandex: has_value(secrets, SecretKey::YandexToken)?,
+            deezer: has_value(secrets, SecretKey::DeezerArl)?,
         })
     }
 
@@ -85,6 +93,7 @@ impl CredentialState {
         match kind {
             CredentialKind::SoundCloudClientId => self.soundcloud,
             CredentialKind::YandexToken => self.yandex,
+            CredentialKind::DeezerArl => self.deezer,
         }
     }
 
@@ -92,6 +101,7 @@ impl CredentialState {
         match kind {
             CredentialKind::SoundCloudClientId => self.soundcloud = configured,
             CredentialKind::YandexToken => self.yandex = configured,
+            CredentialKind::DeezerArl => self.deezer = configured,
         }
     }
 }

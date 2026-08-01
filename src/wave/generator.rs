@@ -614,6 +614,7 @@ mod tests {
             capability: PlaybackCapability::Full,
             genres: Vec::new(),
             explicit: false,
+            drm: false,
         }
     }
 }

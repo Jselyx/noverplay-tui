@@ -3,7 +3,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle, time::sleep};
 
 use crate::{
-    model::TrackRef,
+    model::{SearchProvider, TrackRef},
     provider::{ProviderRegistry, SearchPage},
 };
 
@@ -14,13 +14,14 @@ pub(super) fn spawn_search(
     sender: UnboundedSender<RuntimeMessage>,
     generation: u64,
     query: String,
+    provider: SearchProvider,
     delay: Duration,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         if !delay.is_zero() {
             sleep(delay).await;
         }
-        let pages = providers.search_all(&query).await;
+        let pages = providers.search(&query, provider).await;
         let (tracks, failures) = merge_pages(pages);
         let _ = sender.send(RuntimeMessage::SearchFinished {
             generation,
@@ -128,6 +129,7 @@ mod tests {
             capability: PlaybackCapability::Full,
             genres: Vec::new(),
             explicit: false,
+            drm: false,
         }
     }
 }

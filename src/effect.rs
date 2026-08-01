@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::{
     account::models::{AccountAction, CaptchaSolution},
     credentials::CredentialKind,
-    model::TrackRef,
+    model::{SearchProvider, TrackRef},
     onboarding::zapret::ZapretPlan,
 };
 
@@ -11,6 +11,7 @@ use crate::{
 pub enum AppEffect {
     Search {
         query: String,
+        provider: SearchProvider,
         immediate: bool,
     },
     GenerateWave,

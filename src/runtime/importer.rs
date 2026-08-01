@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::SystemTime};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 use url::Url;
 
@@ -29,10 +29,7 @@ async fn import_playlist(
     source: &str,
 ) -> Result<crate::model::Playlist> {
     let url = Url::parse(source.trim()).context("ссылка повреждена")?;
-    // дизер стоит за стеклом с табличкой потом, ломать витрину ради мёртвого sdk никто не нанимался
-    if ProviderKind::from_url(url.as_str()) == Some(ProviderKind::Deezer) {
-        bail!("Deezer пока оставлен на будущее, импортируй SoundCloud или Yandex")
-    }
+    let _provider_kind = ProviderKind::from_url(url.as_str());
     let now_ms = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
@@ -122,6 +119,7 @@ mod tests {
             capability: PlaybackCapability::Full,
             genres: Vec::new(),
             explicit: false,
+            drm: false,
         }
     }
 }
