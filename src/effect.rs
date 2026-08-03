@@ -14,7 +14,12 @@ pub enum AppEffect {
         provider: SearchProvider,
         immediate: bool,
     },
+    ControlSearch {
+        query: String,
+        provider: SearchProvider,
+    },
     GenerateWave,
+    ControlWave,
     SetLiked {
         track: Box<TrackRef>,
         liked: bool,

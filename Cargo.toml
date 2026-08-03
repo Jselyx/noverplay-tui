@@ -9,6 +9,10 @@ description = "Терминальный музыкальный клиент Nove
 name = "noverplay"
 path = "src/main.rs"
 
+[[bin]]
+name = "np"
+path = "src/bin/np.rs"
+
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
@@ -40,6 +44,7 @@ zeroize = "1"
 global-hotkey = "0.7.0"
 blowfish = "0.9"
 cbc = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 md5 = "0.7"
 aes = "0.8"
 

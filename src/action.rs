@@ -40,7 +40,15 @@ pub enum Action {
         tracks: Vec<TrackRef>,
         failures: Vec<String>,
     },
+    ControlSearchFinished {
+        tracks: Vec<TrackRef>,
+        failures: Vec<String>,
+    },
     WaveFinished {
+        tracks: Vec<TrackRef>,
+        failures: Vec<String>,
+    },
+    ControlWaveFinished {
         tracks: Vec<TrackRef>,
         failures: Vec<String>,
     },

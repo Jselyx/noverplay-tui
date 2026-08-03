@@ -2188,6 +2188,7 @@ dependencies = [
  "base64",
  "blowfish",
  "cbc",
+ "chrono",
  "clap",
  "cpal",
  "crossbeam-channel",

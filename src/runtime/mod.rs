@@ -49,12 +49,16 @@ pub struct Runtime {
     search_task: Option<JoinHandle<()>>,
     playback_task: Option<JoinHandle<()>>,
     wave_task: Option<JoinHandle<()>>,
+    control_search_task: Option<JoinHandle<()>>,
+    control_wave_task: Option<JoinHandle<()>>,
     import_task: Option<JoinHandle<()>>,
     account_task: Option<JoinHandle<()>>,
     onboarding_task: Option<JoinHandle<()>>,
     search_generation: u64,
     playback_generation: u64,
     wave_generation: u64,
+    control_search_generation: u64,
+    control_wave_generation: u64,
     import_generation: u64,
     account_generation: u64,
     onboarding_generation: u64,
@@ -96,12 +100,16 @@ impl Runtime {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            control_search_task: None,
+            control_wave_task: None,
             import_task: None,
             account_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            control_search_generation: 0,
+            control_wave_generation: 0,
             import_generation: 0,
             account_generation: 0,
             onboarding_generation: 0,
@@ -127,7 +135,11 @@ impl Runtime {
                     provider,
                     immediate,
                 } => self.start_search(query, provider, immediate, &mut actions),
+                AppEffect::ControlSearch { query, provider } => {
+                    self.start_control_search(query, provider)
+                }
                 AppEffect::GenerateWave => self.start_wave(&mut actions),
+                AppEffect::ControlWave => self.start_control_wave(&mut actions),
                 AppEffect::SetLiked { track, liked } => {
                     actions.push(Action::LikeSaved {
                         result: self.set_liked(&track, liked),
@@ -244,6 +256,13 @@ impl Runtime {
                         failures,
                     });
                 }
+                RuntimeMessage::ControlSearchFinished {
+                    generation,
+                    tracks,
+                    failures,
+                } if generation == self.control_search_generation => {
+                    actions.push(Action::ControlSearchFinished { tracks, failures });
+                }
                 RuntimeMessage::PlaybackReady { generation, source }
                     if generation == self.playback_generation =>
                 {
@@ -268,6 +287,13 @@ impl Runtime {
                     failures,
                 } if generation == self.wave_generation => {
                     actions.push(Action::WaveFinished { tracks, failures });
+                }
+                RuntimeMessage::ControlWaveFinished {
+                    generation,
+                    tracks,
+                    failures,
+                } if generation == self.control_wave_generation => {
+                    actions.push(Action::ControlWaveFinished { tracks, failures });
                 }
                 RuntimeMessage::PlaylistImported { generation, result }
                     if generation == self.import_generation =>
@@ -445,6 +471,25 @@ impl Runtime {
         ));
     }
 
+    fn start_control_search(&mut self, query: String, provider: crate::model::SearchProvider) {
+        if let Some(task) = self.control_search_task.take() {
+            task.abort();
+        }
+        self.control_search_generation = self.control_search_generation.wrapping_add(1);
+        let providers = Arc::clone(&self.providers);
+        let sender = self.sender.clone();
+        let generation = self.control_search_generation;
+        self.control_search_task = Some(tokio::spawn(async move {
+            let pages = providers.search(&query, provider).await;
+            let (tracks, failures) = search::merge_pages(pages);
+            let _ = sender.send(RuntimeMessage::ControlSearchFinished {
+                generation,
+                tracks,
+                failures,
+            });
+        }));
+    }
+
     fn start_playback(&mut self, track: crate::model::TrackRef, actions: &mut Vec<Action>) {
         self.record_current(false, true);
         self.cancel_playback();
@@ -499,6 +544,89 @@ impl Runtime {
             self.wave_generation,
             primary_provider,
         ));
+    }
+
+    fn start_control_wave(&mut self, actions: &mut Vec<Action>) {
+        if let Some(task) = self.control_wave_task.take() {
+            task.abort();
+        }
+        self.control_wave_generation = self.control_wave_generation.wrapping_add(1);
+        let primary_provider = if self
+            .providers
+            .get(crate::model::ProviderKind::YandexMusic)
+            .is_some()
+        {
+            crate::model::ProviderKind::YandexMusic
+        } else if self
+            .providers
+            .get(crate::model::ProviderKind::SoundCloud)
+            .is_some()
+        {
+            crate::model::ProviderKind::SoundCloud
+        } else {
+            actions.push(Action::ControlWaveFinished {
+                tracks: Vec::new(),
+                failures: vec!["Для волны настрой Yandex Music или SoundCloud".to_string()],
+            });
+            return;
+        };
+        let providers = Arc::clone(&self.providers);
+        let storage = self.storage.clone();
+        let sender = self.sender.clone();
+        let generation = self.control_wave_generation;
+        self.control_wave_task = Some(tokio::spawn(async move {
+            let loaded = tokio::task::spawn_blocking(move || {
+                Ok::<_, anyhow::Error>((
+                    storage.recent_history(10_000)?,
+                    storage.liked_tracks_with_time()?,
+                ))
+            })
+            .await;
+            let (history, liked) = match loaded {
+                Ok(Ok(data)) => data,
+                Ok(Err(error)) => {
+                    let _ = sender.send(RuntimeMessage::ControlWaveFinished {
+                        generation,
+                        tracks: Vec::new(),
+                        failures: vec![error.to_string()],
+                    });
+                    return;
+                }
+                Err(error) => {
+                    let _ = sender.send(RuntimeMessage::ControlWaveFinished {
+                        generation,
+                        tracks: Vec::new(),
+                        failures: vec![error.to_string()],
+                    });
+                    return;
+                }
+            };
+            let now_ms = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|duration| duration.as_millis() as i64)
+                .unwrap_or_default();
+            let result = crate::wave::generate_wave(
+                &providers,
+                crate::wave::WaveGenerationRequest {
+                    settings: crate::wave::WaveSettings {
+                        primary_provider,
+                        ..crate::wave::WaveSettings::default()
+                    },
+                    history,
+                    liked,
+                    manual_seeds: Vec::new(),
+                    manual_seed_only: false,
+                    preview: false,
+                    now_ms,
+                },
+            )
+            .await;
+            let _ = sender.send(RuntimeMessage::ControlWaveFinished {
+                generation,
+                tracks: result.tracks,
+                failures: result.failures,
+            });
+        }));
     }
 
     fn start_import(&mut self, source: String) {
@@ -627,6 +755,12 @@ impl Runtime {
         if let Some(task) = self.playback_task.take() {
             task.abort();
         }
+        if let Some(task) = self.control_search_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.control_wave_task.take() {
+            task.abort();
+        }
         if let Some(task) = self.wave_task.take() {
             task.abort();
         }
@@ -713,12 +847,16 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            control_search_task: None,
+            control_wave_task: None,
             import_task: None,
             account_task: None,
             onboarding_task: None,
             search_generation: 7,
             playback_generation: 3,
             wave_generation: 0,
+            control_search_generation: 0,
+            control_wave_generation: 0,
             import_generation: 0,
             account_generation: 0,
             onboarding_generation: 0,
@@ -773,12 +911,16 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            control_search_task: None,
+            control_wave_task: None,
             import_task: None,
             account_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            control_search_generation: 0,
+            control_wave_generation: 0,
             import_generation: 0,
             account_generation: 0,
             onboarding_generation: 0,
@@ -816,12 +958,16 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            control_search_task: None,
+            control_wave_task: None,
             import_task: None,
             account_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            control_search_generation: 0,
+            control_wave_generation: 0,
             import_generation: 0,
             account_generation: 0,
             onboarding_generation: 0,
@@ -867,12 +1013,16 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            control_search_task: None,
+            control_wave_task: None,
             import_task: None,
             account_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            control_search_generation: 0,
+            control_wave_generation: 0,
             import_generation: 0,
             account_generation: 0,
             onboarding_generation: 0,
@@ -908,12 +1058,16 @@ mod tests {
             search_task: None,
             playback_task: None,
             wave_task: None,
+            control_search_task: None,
+            control_wave_task: None,
             import_task: None,
             account_task: None,
             onboarding_task: None,
             search_generation: 0,
             playback_generation: 0,
             wave_generation: 0,
+            control_search_generation: 0,
+            control_wave_generation: 0,
             import_generation: 0,
             account_generation: 0,
             onboarding_generation: 0,

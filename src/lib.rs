@@ -5,6 +5,7 @@ pub mod audio;
 pub mod cli;
 pub mod command_palette;
 pub mod config;
+pub mod control;
 pub mod credentials;
 pub mod effect;
 pub mod event;

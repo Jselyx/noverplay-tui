@@ -355,6 +355,7 @@ impl App {
                 tracks,
                 failures,
             } => self.finish_search(query, tracks, failures),
+            Action::ControlSearchFinished { .. } => {}
             Action::WaveFinished { tracks, failures } => {
                 self.wave_tracks = tracks;
                 self.wave_loading = false;
@@ -373,6 +374,7 @@ impl App {
                     )
                 };
             }
+            Action::ControlWaveFinished { .. } => {}
             Action::AudioProgress {
                 position_ms,
                 buffered_ms,
@@ -479,6 +481,136 @@ impl App {
         }
     }
 
+    pub fn control_search(&mut self, query: String, provider: SearchProvider) {
+        self.effects
+            .push(AppEffect::ControlSearch { query, provider });
+    }
+
+    pub fn control_wave(&mut self) {
+        self.effects.push(AppEffect::ControlWave);
+    }
+
+    pub fn control_play(&mut self, track: TrackRef) {
+        if let Some(index) = self
+            .queue
+            .iter()
+            .position(|current| current.provider_key() == track.provider_key())
+        {
+            self.queue_index = Some(index);
+        } else {
+            self.queue.push(track.clone());
+            self.queue_index = Some(self.queue.len() - 1);
+        }
+        self.now_playing = Some(track.clone());
+        self.player.position_ms = 0;
+        self.player.buffered_ms = 0;
+        self.player.duration_ms = track.duration_ms.unwrap_or_default();
+        self.player.status = PlaybackStatus::Buffering;
+        self.queue_dirty = true;
+        self.effects.push(AppEffect::Play(Box::new(track)));
+    }
+
+    pub fn control_play_wave(&mut self, tracks: Vec<TrackRef>) -> Option<(TrackRef, usize)> {
+        let first = tracks.first()?.clone();
+        let count = tracks.len();
+        self.wave_tracks = tracks.clone();
+        self.queue = tracks;
+        self.queue_index = Some(0);
+        self.now_playing = Some(first.clone());
+        self.player.position_ms = 0;
+        self.player.buffered_ms = 0;
+        self.player.duration_ms = first.duration_ms.unwrap_or_default();
+        self.player.status = PlaybackStatus::Buffering;
+        self.queue_dirty = true;
+        self.effects.push(AppEffect::Play(Box::new(first.clone())));
+        Some((first, count))
+    }
+
+    pub fn control_queue_add(&mut self, track: TrackRef) -> usize {
+        self.queue.push(track);
+        self.queue_dirty = true;
+        self.queue.len()
+    }
+
+    pub fn control_queue_remove(&mut self, position: usize) -> Result<TrackRef, String> {
+        let index = position
+            .checked_sub(1)
+            .filter(|index| *index < self.queue.len())
+            .ok_or_else(|| format!("в очереди нет позиции {position}"))?;
+        let removed = self.queue.remove(index);
+        self.queue_index = match self.queue_index {
+            Some(current) if current == index => {
+                self.now_playing = None;
+                self.player.status = PlaybackStatus::Stopped;
+                self.effects.push(AppEffect::Stop);
+                None
+            }
+            Some(current) if current > index => Some(current - 1),
+            Some(current) if current < self.queue.len() => Some(current),
+            _ => None,
+        };
+        self.queue_dirty = true;
+        Ok(removed)
+    }
+
+    pub fn control_queue_clear(&mut self) {
+        self.queue.clear();
+        self.queue_index = None;
+        self.now_playing = None;
+        self.player.status = PlaybackStatus::Stopped;
+        self.queue_dirty = true;
+        self.effects.push(AppEffect::Stop);
+    }
+
+    pub fn control_pause(&mut self) -> Result<(), String> {
+        if self.now_playing.is_none() {
+            return Err("сейчас ничего не играет".to_string());
+        }
+        self.player.status = PlaybackStatus::Paused;
+        self.effects.push(AppEffect::Pause);
+        Ok(())
+    }
+
+    pub fn control_resume(&mut self) -> Result<(), String> {
+        let Some(track) = self.now_playing.clone() else {
+            return Err("нечего продолжать".to_string());
+        };
+        if self.player.status == PlaybackStatus::Stopped {
+            self.player.position_ms = 0;
+            self.player.buffered_ms = 0;
+            self.player.status = PlaybackStatus::Buffering;
+            self.effects.push(AppEffect::Play(Box::new(track)));
+        } else {
+            self.player.status = PlaybackStatus::Playing;
+            self.effects.push(AppEffect::Resume);
+        }
+        Ok(())
+    }
+
+    pub fn control_stop(&mut self) {
+        self.player.status = PlaybackStatus::Stopped;
+        self.effects.push(AppEffect::Stop);
+    }
+
+    pub fn control_toggle(&mut self) -> Result<(), String> {
+        if matches!(
+            self.player.status,
+            PlaybackStatus::Playing | PlaybackStatus::Buffering
+        ) {
+            self.control_pause()
+        } else {
+            self.control_resume()
+        }
+    }
+
+    pub fn control_next(&mut self) {
+        self.next_track();
+    }
+
+    pub fn control_previous(&mut self) {
+        self.previous_track();
+    }
+
     pub fn take_effects(&mut self) -> Vec<AppEffect> {
         std::mem::take(&mut self.effects)
     }
@@ -521,6 +653,18 @@ impl App {
     pub fn set_credentials(&mut self, credentials: CredentialState) {
         self.credentials = credentials;
         self.dirty = true;
+    }
+
+    pub fn status_snapshot(&self) -> crate::control::StatusSnapshot {
+        crate::control::StatusSnapshot {
+            playback: format!("{:?}", self.player.status).to_ascii_lowercase(),
+            track: self.now_playing.clone(),
+            position_ms: self.player.position_ms,
+            duration_ms: self.player.duration_ms,
+            volume_percent: self.player.volume_percent,
+            queue_index: self.queue_index,
+            queue_length: self.queue.len(),
+        }
     }
 
     pub fn selected_tracks(&self) -> &[TrackRef] {
@@ -1342,6 +1486,59 @@ mod tests {
         app.screen = Screen::Library;
         app.handle(Action::Activate);
         assert_eq!(app.take_effects(), vec![AppEffect::Play(Box::new(track))]);
+    }
+
+    #[test]
+    fn control_wave_replaces_queue_and_starts_first_track() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        let first = test_track();
+        let second = TrackRef {
+            id: "second".to_string(),
+            ..test_track()
+        };
+
+        assert_eq!(
+            app.control_play_wave(vec![first.clone(), second.clone()]),
+            Some((first.clone(), 2))
+        );
+        assert_eq!(app.queue, vec![first.clone(), second]);
+        assert_eq!(app.queue_index, Some(0));
+        assert_eq!(app.now_playing, Some(first.clone()));
+        assert_eq!(app.take_effects(), vec![AppEffect::Play(Box::new(first))]);
+    }
+
+    #[test]
+    fn control_queue_remove_keeps_current_index_valid() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("db.sqlite3"));
+        storage.initialize().unwrap();
+        let mut app = App::load(&storage, &AppConfig::default()).unwrap();
+        let first = test_track();
+        let second = TrackRef {
+            id: "second".to_string(),
+            ..test_track()
+        };
+        let current = TrackRef {
+            id: "current".to_string(),
+            ..test_track()
+        };
+        app.queue = vec![first.clone(), second.clone(), current.clone()];
+        app.queue_index = Some(2);
+        app.now_playing = Some(current.clone());
+        app.player.status = PlaybackStatus::Playing;
+
+        assert_eq!(app.control_queue_remove(1).unwrap(), first);
+        assert_eq!(app.queue_index, Some(1));
+        assert_eq!(app.now_playing, Some(current.clone()));
+        assert_eq!(app.control_queue_remove(2).unwrap(), current);
+        assert_eq!(app.queue, vec![second]);
+        assert_eq!(app.queue_index, None);
+        assert_eq!(app.now_playing, None);
+        assert_eq!(app.player.status, PlaybackStatus::Stopped);
+        assert_eq!(app.take_effects(), vec![AppEffect::Stop]);
     }
 
     #[test]

@@ -17,7 +17,17 @@ pub(super) enum RuntimeMessage {
         tracks: Vec<TrackRef>,
         failures: Vec<String>,
     },
+    ControlSearchFinished {
+        generation: u64,
+        tracks: Vec<TrackRef>,
+        failures: Vec<String>,
+    },
     WaveFinished {
+        generation: u64,
+        tracks: Vec<TrackRef>,
+        failures: Vec<String>,
+    },
+    ControlWaveFinished {
         generation: u64,
         tracks: Vec<TrackRef>,
         failures: Vec<String>,

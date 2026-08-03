@@ -12,6 +12,7 @@ pub struct AppPaths {
     pub config_file: PathBuf,
     pub database_file: PathBuf,
     pub secrets_file: PathBuf,
+    pub control_endpoint_file: PathBuf,
 }
 
 impl AppPaths {
@@ -30,6 +31,7 @@ impl AppPaths {
             config_file: config_dir.join("config.toml"),
             database_file: data_dir.join("library.sqlite3"),
             secrets_file: data_dir.join("secrets.json"),
+            control_endpoint_file: data_dir.join("control.json"),
             config_dir,
             data_dir,
             cache_dir,

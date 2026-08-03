@@ -300,6 +300,46 @@ impl Storage {
         Ok(history)
     }
 
+    pub fn history_between(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+        limit: usize,
+    ) -> Result<Vec<HistoryEntry>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "
+            SELECT track_json, played_at_ms, completed, skipped
+            FROM history
+            WHERE played_at_ms >= ?1 AND played_at_ms < ?2
+            ORDER BY played_at_ms DESC
+            LIMIT ?3
+            ",
+        )?;
+        let rows = statement.query_map(
+            params![start_ms, end_ms, limit.clamp(1, 10_000) as i64],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, bool>(2)?,
+                    row.get::<_, bool>(3)?,
+                ))
+            },
+        )?;
+        let mut history = Vec::new();
+        for row in rows {
+            let (track, played_at_ms, completed, skipped) = row?;
+            history.push(HistoryEntry {
+                track: decode_track(&track)?,
+                played_at_ms,
+                completed,
+                skipped,
+            });
+        }
+        Ok(history)
+    }
+
     pub fn save_queue(&self, snapshot: &QueueSnapshot) -> Result<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -494,6 +534,30 @@ mod tests {
         assert_eq!(
             storage.liked_tracks_with_time().unwrap(),
             [(second, 20), (first, 10)]
+        );
+    }
+
+    #[test]
+    fn history_between_filters_both_date_boundaries() {
+        let (_temp, storage) = storage();
+        for played_at_ms in [999, 1_000, 1_999, 2_000] {
+            storage
+                .record_history(&HistoryEntry {
+                    track: track(&played_at_ms.to_string()),
+                    played_at_ms,
+                    completed: false,
+                    skipped: false,
+                })
+                .unwrap();
+        }
+
+        let entries = storage.history_between(1_000, 2_000, 10).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.played_at_ms)
+                .collect::<Vec<_>>(),
+            vec![1_999, 1_000]
         );
     }
 }

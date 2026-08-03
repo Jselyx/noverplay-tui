@@ -1,10 +1,19 @@
+use std::{
+    net::TcpStream,
+    time::{Duration, Instant},
+};
+
 use anyhow::Result;
 use clap::Parser;
 use noverplay_tui::{
+    action::Action,
     app::{App, Screen},
     audio::AudioEngine,
     cli::{Cli, run_command},
     config::{AppConfig, AppPaths},
+    control::{
+        ControlCommand, ControlRequest, ControlResponse, ControlServer, ResponseData, send_response,
+    },
     event::EventPump,
     hotkeys::GlobalHotkeys,
     runtime::Runtime,
@@ -14,14 +23,15 @@ use noverplay_tui::{
     ui,
 };
 
+type PendingControl = (TcpStream, ControlCommand, Instant);
+const CONTROL_COMMAND_TIMEOUT: Duration = Duration::from_secs(28);
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(command) => run_command(command)?,
-        None => {
-            run_tui().await?;
-        }
+        None => run_tui().await?,
     }
     Ok(())
 }
@@ -40,6 +50,7 @@ async fn run_tui() -> Result<()> {
     }
     let storage = Storage::new(paths.database_file.clone());
     storage.initialize()?;
+    let control = ControlServer::bind(&paths)?;
     let audio_outputs = if config.onboarding_completed {
         Vec::new()
     } else {
@@ -64,12 +75,14 @@ async fn run_tui() -> Result<()> {
             None
         }
     };
+    let mut pending_control = None;
 
     while !app.should_quit {
+        poll_control(&control, &mut app, &mut pending_control);
         if let Some(action) = hotkeys.as_ref().and_then(GlobalHotkeys::try_action) {
             app.handle(action);
         }
-        drive_runtime(&mut app, &mut runtime);
+        drive_runtime(&mut app, &mut runtime, &mut pending_control);
         app.show_keybindings_notice_if_needed();
         if app.dirty {
             terminal
@@ -90,7 +103,7 @@ async fn run_tui() -> Result<()> {
             )
             .await;
         app.handle(action);
-        drive_runtime(&mut app, &mut runtime);
+        drive_runtime(&mut app, &mut runtime, &mut pending_control);
         if onboarding_open && !app.onboarding_open() {
             config.onboarding_completed = true;
             if let Some(result) = app.take_onboarding_result() {
@@ -125,7 +138,110 @@ async fn run_tui() -> Result<()> {
     Ok(())
 }
 
-fn drive_runtime(app: &mut App, runtime: &mut Runtime) {
+fn poll_control(control: &ControlServer, app: &mut App, pending: &mut Option<PendingControl>) {
+    if pending
+        .as_ref()
+        .is_some_and(|(_, _, started)| started.elapsed() >= CONTROL_COMMAND_TIMEOUT)
+        && let Some((mut stream, _, _)) = pending.take()
+    {
+        let _ = send_response(
+            &mut stream,
+            &ControlResponse::error("Control-команда превысила таймаут"),
+        );
+    }
+    for (mut stream, request) in control.poll() {
+        if is_async_control(&request.command) && pending.is_some() {
+            let _ = send_response(
+                &mut stream,
+                &ControlResponse::error("Предыдущая поисковая команда ещё выполняется"),
+            );
+        } else if let Some(command) = begin_control(app, request, &mut stream) {
+            *pending = Some((stream, command, Instant::now()));
+        }
+    }
+}
+
+fn is_async_control(command: &ControlCommand) -> bool {
+    matches!(
+        command,
+        ControlCommand::Play { .. }
+            | ControlCommand::Search { .. }
+            | ControlCommand::QueueAdd { .. }
+            | ControlCommand::Wave
+    )
+}
+
+fn begin_control(
+    app: &mut App,
+    request: ControlRequest,
+    stream: &mut TcpStream,
+) -> Option<ControlCommand> {
+    let command = request.command;
+    let response: Result<ControlResponse, String> = match &command {
+        ControlCommand::Play { query, provider }
+        | ControlCommand::Search { query, provider }
+        | ControlCommand::QueueAdd { query, provider } => {
+            app.control_search(query.clone(), *provider);
+            return Some(command);
+        }
+        ControlCommand::Wave => {
+            app.control_wave();
+            return Some(command);
+        }
+        ControlCommand::Pause => app
+            .control_pause()
+            .map(|_| ControlResponse::accepted("Пауза")),
+        ControlCommand::Resume => app
+            .control_resume()
+            .map(|_| ControlResponse::accepted("Воспроизведение продолжено")),
+        ControlCommand::Toggle => app
+            .control_toggle()
+            .map(|_| ControlResponse::accepted("Состояние переключено")),
+        ControlCommand::Next => {
+            if app.queue.is_empty() {
+                Err("очередь пуста".to_string())
+            } else {
+                app.control_next();
+                Ok(ControlResponse::accepted("Следующий трек"))
+            }
+        }
+        ControlCommand::Previous => {
+            if app.queue.is_empty() {
+                Err("очередь пуста".to_string())
+            } else {
+                app.control_previous();
+                Ok(ControlResponse::accepted("Предыдущий трек"))
+            }
+        }
+        ControlCommand::Stop => {
+            app.control_stop();
+            Ok(ControlResponse::accepted("Остановлено"))
+        }
+        ControlCommand::QueueList => Ok(ControlResponse::with_data(
+            "Очередь",
+            ResponseData::Tracks(app.queue.clone()),
+        )),
+        ControlCommand::QueueRemove { index } => app.control_queue_remove(*index).map(|track| {
+            ControlResponse::accepted(format!(
+                "Удалено: {} — {}",
+                track.display_artist(),
+                track.title
+            ))
+        }),
+        ControlCommand::QueueClear => {
+            app.control_queue_clear();
+            Ok(ControlResponse::accepted("Очередь очищена"))
+        }
+        ControlCommand::Status => Ok(ControlResponse::with_data(
+            "Текущее состояние",
+            ResponseData::Status(Box::new(app.status_snapshot())),
+        )),
+    };
+    let _ = send_response(stream, &response.unwrap_or_else(ControlResponse::error));
+    None
+}
+
+fn drive_runtime(app: &mut App, runtime: &mut Runtime, pending: &mut Option<PendingControl>) {
     loop {
         let mut actions = runtime.poll_actions();
         let effects = app.take_effects();
@@ -134,7 +250,212 @@ fn drive_runtime(app: &mut App, runtime: &mut Runtime) {
         }
         actions.extend(runtime.dispatch(effects));
         for action in actions {
-            app.handle(action);
+            if !finish_control(app, &action, pending) {
+                app.handle(action);
+            }
+        }
+    }
+}
+
+fn finish_control(app: &mut App, action: &Action, pending: &mut Option<PendingControl>) -> bool {
+    let (tracks, failures, wave_result) = match action {
+        Action::ControlSearchFinished { tracks, failures } => (tracks, failures, false),
+        Action::ControlWaveFinished { tracks, failures } => (tracks, failures, true),
+        _ => return false,
+    };
+    let matches_pending = pending
+        .as_ref()
+        .is_some_and(|(_, command, _)| wave_result == matches!(command, ControlCommand::Wave));
+    if !matches_pending {
+        return true;
+    }
+    let Some((mut stream, command, _)) = pending.take() else {
+        return true;
+    };
+    let playable = tracks
+        .iter()
+        .find(|track| track.capability.can_play())
+        .cloned();
+    let response = match command {
+        ControlCommand::Search { .. } if tracks.is_empty() => ControlResponse::error(
+            failures
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "Ничего не найдено".to_string()),
+        ),
+        ControlCommand::Search { .. } => ControlResponse::with_data(
+            format!("Найдено: {}", tracks.len()),
+            ResponseData::Tracks(tracks.clone()),
+        ),
+        ControlCommand::Play { .. } => match playable {
+            Some(track) => {
+                app.control_play(track.clone());
+                ControlResponse::accepted(format!(
+                    "Запускаю: {} — {}",
+                    track.display_artist(),
+                    track.title
+                ))
+            }
+            None => ControlResponse::error(
+                failures
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Нет playable результатов".to_string()),
+            ),
+        },
+        ControlCommand::Wave => {
+            let playable = tracks
+                .iter()
+                .filter(|track| track.capability.can_play())
+                .cloned()
+                .collect::<Vec<_>>();
+            match app.control_play_wave(playable) {
+                Some((track, count)) => ControlResponse::accepted(format!(
+                    "Запускаю Мою волну ({count}): {} — {}",
+                    track.display_artist(),
+                    track.title
+                )),
+                None => ControlResponse::error(
+                    failures
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "Волна не нашла playable треков".to_string()),
+                ),
+            }
+        }
+        ControlCommand::QueueAdd { .. } => match playable {
+            Some(track) => {
+                let position = app.control_queue_add(track);
+                ControlResponse::accepted(format!("Добавлено в очередь: {position}"))
+            }
+            None => ControlResponse::error(
+                failures
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Нет playable результатов".to_string()),
+            ),
+        },
+        _ => ControlResponse::error("Неожиданное завершение control-команды"),
+    };
+    app.status_message = response.message.clone();
+    let _ = send_response(&mut stream, &response);
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io::BufRead, net::TcpListener, time::Duration};
+
+    use noverplay_tui::model::{PlaybackCapability, ProviderKind, TrackRef};
+    use url::Url;
+
+    use super::*;
+
+    #[test]
+    fn async_control_sends_one_final_response() {
+        let (_temp, mut app) = test_app();
+        let (client, mut server) = stream_pair();
+        client
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let command = ControlCommand::Play {
+            query: "test".to_string(),
+            provider: noverplay_tui::model::SearchProvider::All,
+        };
+        let pending_command = begin_control(
+            &mut app,
+            ControlRequest {
+                token: "unused".to_string(),
+                command,
+            },
+            &mut server,
+        )
+        .unwrap();
+        let mut byte = [0_u8; 1];
+        assert!(
+            client.peek(&mut byte).is_err(),
+            "preliminary response leaked"
+        );
+
+        let mut pending = Some((server, pending_command, Instant::now()));
+        assert!(finish_control(
+            &mut app,
+            &Action::ControlSearchFinished {
+                tracks: vec![track("1")],
+                failures: Vec::new(),
+            },
+            &mut pending,
+        ));
+        assert!(pending.is_none());
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(client)
+            .read_line(&mut line)
+            .unwrap();
+        let response: ControlResponse = serde_json::from_str(&line).unwrap();
+        assert!(response.ok);
+        assert!(response.data.is_none());
+        assert!(response.message.contains("Track 1"));
+        assert_eq!(
+            app.now_playing.as_ref().map(|track| track.id.as_str()),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn stale_wave_result_does_not_finish_a_pending_search() {
+        let (_temp, mut app) = test_app();
+        let (_client, server) = stream_pair();
+        let mut pending = Some((
+            server,
+            ControlCommand::Search {
+                query: "test".to_string(),
+                provider: noverplay_tui::model::SearchProvider::All,
+            },
+            Instant::now(),
+        ));
+        assert!(finish_control(
+            &mut app,
+            &Action::ControlWaveFinished {
+                tracks: vec![track("stale")],
+                failures: Vec::new(),
+            },
+            &mut pending,
+        ));
+        assert!(pending.is_some());
+        assert!(app.now_playing.is_none());
+    }
+
+    fn test_app() -> (tempfile::TempDir, App) {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path().join("library.sqlite3"));
+        storage.initialize().unwrap();
+        let app = App::load(&storage, &AppConfig::default()).unwrap();
+        (temp, app)
+    }
+
+    fn stream_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (client, server)
+    }
+
+    fn track(id: &str) -> TrackRef {
+        TrackRef {
+            provider: ProviderKind::SoundCloud,
+            id: id.to_string(),
+            title: format!("Track {id}"),
+            artists: vec!["Artist".to_string()],
+            duration_ms: Some(120_000),
+            artwork_url: None,
+            web_url: Url::parse("https://soundcloud.com/test/track").unwrap(),
+            capability: PlaybackCapability::Full,
+            genres: Vec::new(),
+            explicit: false,
+            drm: false,
         }
     }
 }

@@ -32,7 +32,7 @@ pub(super) fn spawn_search(
     })
 }
 
-fn merge_pages(
+pub(super) fn merge_pages(
     pages: Vec<(crate::model::ProviderKind, anyhow::Result<SearchPage>)>,
 ) -> (Vec<TrackRef>, Vec<String>) {
     let mut tracks = Vec::new();
