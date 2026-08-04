@@ -1,14 +1,18 @@
 # Noverplay TUI
 
-[![CI](https://github.com/Jselyx/noverplay-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/Jselyx/noverplay-tui/actions/workflows/ci.yml)
-![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-5c6ac4)
-[![License: GPL-3.0](https://img.shields.io/github/license/Jselyx/noverplay-tui)](LICENSE)
+<p align="center">
+  <a href="https://github.com/Jselyx/noverplay-tui/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Jselyx/noverplay-tui/ci.yml?branch=main&amp;style=for-the-badge&amp;logo=githubactions&amp;logoColor=white&amp;label=CI" alt="CI"></a>
+  <a href="#установка"><img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux-0078D4?style=for-the-badge&amp;logo=windowsterminal&amp;logoColor=white" alt="Windows and Linux"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--only-2EA44F?style=for-the-badge" alt="License: GPL-3.0-only"></a>
+</p>
 
-![Rust 2024](https://img.shields.io/badge/Rust-2024-000000?logo=rust&logoColor=white)
-![Ratatui](https://img.shields.io/badge/TUI-Ratatui-f4b860)
-![Tokio](https://img.shields.io/badge/async-Tokio-4b8bbe)
-![CPAL + Symphonia](https://img.shields.io/badge/audio-CPAL%20%2B%20Symphonia-8a63d2)
-![SQLite](https://img.shields.io/badge/storage-SQLite-07405e?logo=sqlite&logoColor=white)
+<p align="center">
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-2024-000000?style=for-the-badge&amp;logo=rust&amp;logoColor=white" alt="Rust 2024"></a>
+  <a href="https://ratatui.rs/"><img src="https://img.shields.io/badge/TUI-Ratatui-F4B860?style=for-the-badge" alt="Ratatui"></a>
+  <a href="https://tokio.rs/"><img src="https://img.shields.io/badge/Async-Tokio-2E5A88?style=for-the-badge" alt="Tokio"></a>
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/Audio-CPAL%20%2B%20Symphonia-8A63D2?style=for-the-badge" alt="CPAL and Symphonia"></a>
+  <a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/Storage-SQLite-07405E?style=for-the-badge&amp;logo=sqlite&amp;logoColor=white" alt="SQLite"></a>
+</p>
 
 **Noverplay TUI** — музыкальный клиент для терминала с единым поиском по SoundCloud, Yandex Music и Deezer, собственной очередью, историей прослушивания и локальным CLI для управления плеером.
 
