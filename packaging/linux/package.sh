@@ -2,11 +2,16 @@
 set -euo pipefail
 
 binary=${1:?"укажи путь к release-бинарнику"}
-version=${2:?"укажи версию"}
-output=${3:-dist}
+np_binary=${2:?"укажи путь к np release-бинарнику"}
+version=${3:?"укажи версию"}
+output=${4:-dist}
 
 if [[ ! -f "$binary" ]]; then
     printf 'Бинарник не найден: %s\n' "$binary" >&2
+    exit 1
+fi
+if [[ ! -f "$np_binary" ]]; then
+    printf 'np бинарник не найден: %s\n' "$np_binary" >&2
     exit 1
 fi
 if ! file -b "$binary" | grep -Eq 'ELF 64-bit.*x86-64'; then
@@ -37,13 +42,15 @@ done
 
 install -d -m 0755 "$stage"
 install -m 0755 "$binary" "$stage/noverplay"
+install -m 0755 "$np_binary" "$stage/np"
 install -m 0644 LICENSE "$stage/LICENSE"
-tar -C "$stage" -czf "$archive" noverplay LICENSE
+tar -C "$stage" -czf "$archive" noverplay np LICENSE
 
 install -d -m 0755 "$debroot/DEBIAN" "$debroot/usr/bin" "$debroot/usr/share/doc/noverplay"
 install -m 0755 "$binary" "$debroot/usr/bin/noverplay"
+install -m 0755 "$np_binary" "$debroot/usr/bin/np"
 install -m 0644 LICENSE "$debroot/usr/share/doc/noverplay/copyright"
-installed_size=$(du -k "$binary" | awk '{print $1}')
+installed_size=$(du -ck "$binary" "$np_binary" | awk '/total/{print $1}')
 printf '%s\n' \
     'Package: noverplay' \
     "Version: $version" \

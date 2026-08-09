@@ -1,6 +1,6 @@
 [package]
 name = "noverplay-tui"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "Терминальный музыкальный клиент Noverplay"
@@ -47,6 +47,9 @@ cbc = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 md5 = "0.7"
 aes = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -2,6 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Binary,
     [Parameter(Mandatory = $true)]
+    [string]$NpBinary,
+    [Parameter(Mandatory = $true)]
     [string]$Version,
     [string]$OutputDir = "dist"
 )
@@ -11,6 +13,7 @@ if ($Version -notmatch '^[0-9][0-9A-Za-z.+~-]*$') {
     throw "Версия не подходит для пакета: $Version"
 }
 $binaryPath = (Resolve-Path -LiteralPath $Binary).Path
+$npBinaryPath = (Resolve-Path -LiteralPath $NpBinary).Path
 $licensePath = (Resolve-Path -LiteralPath "LICENSE").Path
 $installerPath = (Resolve-Path -LiteralPath "packaging/windows/install.ps1").Path
 $outputPath = [IO.Path]::GetFullPath($OutputDir)
@@ -27,6 +30,7 @@ if (Test-Path -LiteralPath $archivePath) {
 
 New-Item -ItemType Directory -Path $stagePath -Force | Out-Null
 Copy-Item -LiteralPath $binaryPath -Destination (Join-Path $stagePath "noverplay.exe")
+Copy-Item -LiteralPath $npBinaryPath -Destination (Join-Path $stagePath "np.exe")
 Copy-Item -LiteralPath $licensePath -Destination (Join-Path $stagePath "LICENSE")
 Copy-Item -LiteralPath $installerPath -Destination (Join-Path $stagePath "install.ps1")
 Compress-Archive -Path (Join-Path $stagePath "*") -DestinationPath $archivePath
@@ -44,7 +48,7 @@ $manifest = [ordered]@{
             hash = $sha256
         }
     }
-    bin = "noverplay.exe"
+    bin = @("noverplay.exe", "np.exe")
 }
 $json = $manifest | ConvertTo-Json -Depth 6
 [IO.File]::WriteAllText($manifestPath, "$json`n", [Text.UTF8Encoding]::new($false))

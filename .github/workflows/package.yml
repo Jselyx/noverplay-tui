@@ -6,11 +6,11 @@ on:
       version:
         description: Версия из Cargo.toml без v
         required: true
-        default: 0.1.0
+        default: 1.0.0
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   windows:
@@ -32,10 +32,12 @@ jobs:
       - name: Сборка
         run: cargo build --locked --release
       - name: Проверка бинарника
-        run: target\release\noverplay.exe --version
+        run: |
+          target\release\noverplay.exe --version
+          target\release\np.exe --version
       - name: Упаковка
         shell: pwsh
-        run: .\packaging\windows\package.ps1 -Binary target\release\noverplay.exe -Version $env:PACKAGE_VERSION
+        run: .\packaging\windows\package.ps1 -Binary target\release\noverplay.exe -NpBinary target\release\np.exe -Version $env:PACKAGE_VERSION
       - uses: actions/upload-artifact@v7
         with:
           name: noverplay-windows-x86_64-${{ inputs.version }}
@@ -65,9 +67,11 @@ jobs:
       - name: Сборка
         run: cargo build --locked --release
       - name: Проверка бинарника
-        run: target/release/noverplay --version
+        run: |
+          target/release/noverplay --version
+          target/release/np --version
       - name: Упаковка
-        run: bash packaging/linux/package.sh target/release/noverplay "$PACKAGE_VERSION"
+        run: bash packaging/linux/package.sh target/release/noverplay target/release/np "$PACKAGE_VERSION"
       - uses: actions/upload-artifact@v7
         with:
           name: noverplay-linux-x86_64-${{ inputs.version }}
@@ -77,3 +81,24 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: GitHub Release
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Публикация
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          gh release create "v$PACKAGE_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Noverplay TUI $PACKAGE_VERSION" \
+            --notes "Первый публичный релиз TUI. np теперь сам поднимает фоновый плеер, а пакеты содержат оба бинарника."
+          gh release upload "v$PACKAGE_VERSION" dist/* --repo "$GITHUB_REPOSITORY" --clobber

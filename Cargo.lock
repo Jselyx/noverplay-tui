@@ -2180,7 +2180,7 @@ dependencies = [
 
 [[package]]
 name = "noverplay-tui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aes",
  "anyhow",
@@ -2199,6 +2199,7 @@ dependencies = [
  "global-hotkey",
  "hex",
  "keyring",
+ "libc",
  "md5 0.7.0",
  "rand_core 0.6.4",
  "ratatui",

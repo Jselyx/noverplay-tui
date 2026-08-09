@@ -60,6 +60,7 @@ pub enum ControlCommand {
     },
     QueueClear,
     Status,
+    Shutdown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -119,7 +120,7 @@ impl ControlResponse {
     name = "np",
     bin_name = "np",
     version,
-    about = "Управление запущенным Noverplay"
+    about = "Управление Noverplay, даже если TUI сейчас закрыт"
 )]
 pub struct NpCli {
     #[command(subcommand)]
@@ -240,11 +241,21 @@ pub struct RecentHistoryArgs {
     pub json: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlOwner {
+    #[default]
+    Interactive,
+    Background,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct Endpoint {
     address: SocketAddr,
     token: String,
     pid: u32,
+    #[serde(default)]
+    owner: ControlOwner,
 }
 
 pub struct ControlServer {
@@ -257,6 +268,14 @@ pub struct ControlServer {
 
 impl ControlServer {
     pub fn bind(paths: &AppPaths) -> Result<Self> {
+        Self::bind_as(paths, ControlOwner::Interactive)
+    }
+
+    pub fn bind_background(paths: &AppPaths) -> Result<Self> {
+        Self::bind_as(paths, ControlOwner::Background)
+    }
+
+    fn bind_as(paths: &AppPaths, owner: ControlOwner) -> Result<Self> {
         remove_stale_endpoint(&paths.control_endpoint_file)?;
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .context("Не удалось открыть локальный control socket")?;
@@ -266,6 +285,7 @@ impl ControlServer {
             address: listener.local_addr()?,
             token: token.clone(),
             pid: std::process::id(),
+            owner,
         };
         write_endpoint(&paths.control_endpoint_file, &endpoint)?;
         let (sender, receiver) = mpsc::sync_channel(CONTROL_QUEUE_CAPACITY);
@@ -328,6 +348,16 @@ impl ControlServer {
 
     pub fn poll(&self) -> Vec<(TcpStream, ControlRequest)> {
         self.receiver.try_iter().collect()
+    }
+}
+
+pub fn active_control_owner(paths: &AppPaths) -> Option<ControlOwner> {
+    let endpoint = read_endpoint(&paths.control_endpoint_file).ok()?;
+    if TcpStream::connect_timeout(&endpoint.address, Duration::from_millis(150)).is_ok() {
+        Some(endpoint.owner)
+    } else {
+        remove_endpoint_if_matches(&paths.control_endpoint_file, &endpoint);
+        None
     }
 }
 
@@ -447,7 +477,7 @@ fn write_endpoint(path: &Path, endpoint: &Endpoint) -> Result<()> {
     }
     let mut file = options
         .open(path)
-        .with_context(|| "Noverplay TUI уже запущен или endpoint занят")?;
+        .with_context(|| "Noverplay уже запущен или endpoint занят")?;
     let result = (|| -> Result<()> {
         file.write_all(&serde_json::to_vec(endpoint)?)?;
         file.sync_all()?;
@@ -461,7 +491,7 @@ fn write_endpoint(path: &Path, endpoint: &Endpoint) -> Result<()> {
 
 fn read_endpoint(path: &Path) -> Result<Endpoint> {
     let bytes =
-        fs::read(path).with_context(|| "Noverplay TUI не запущен (control endpoint не найден)")?;
+        fs::read(path).with_context(|| "Noverplay не запущен (control endpoint не найден)")?;
     let endpoint: Endpoint =
         serde_json::from_slice(&bytes).context("control endpoint повреждён")?;
     if !endpoint.address.ip().is_loopback() {
@@ -486,14 +516,14 @@ fn remove_stale_endpoint(path: &Path) -> Result<()> {
             .with_context(|| format!("Не удалось удалить stale endpoint {}", path.display()))?;
     }
     if path.exists() {
-        bail!("Noverplay TUI уже запущен");
+        bail!("Noverplay уже запущен");
     }
     Ok(())
 }
 
 fn stale_error(path: &Path, endpoint: &Endpoint, error: std::io::Error) -> anyhow::Error {
     remove_endpoint_if_matches(path, endpoint);
-    anyhow!("Noverplay TUI не отвечает; stale control endpoint удалён: {error}")
+    anyhow!("Noverplay не отвечает; stale control endpoint удалён: {error}")
 }
 
 fn remove_endpoint_if_matches(path: &Path, endpoint: &Endpoint) {
@@ -574,14 +604,24 @@ mod tests {
             address: "127.0.0.1:10001".parse().unwrap(),
             token: "old".to_string(),
             pid: 1,
+            owner: ControlOwner::Interactive,
         };
         let replacement = Endpoint {
             address: "127.0.0.1:10002".parse().unwrap(),
             token: "new".to_string(),
             pid: 2,
+            owner: ControlOwner::Background,
         };
         fs::write(&path, serde_json::to_vec(&replacement).unwrap()).unwrap();
         remove_endpoint_if_matches(&path, &old);
         assert_eq!(read_endpoint(&path).unwrap(), replacement);
+    }
+
+    #[test]
+    fn endpoint_from_old_release_defaults_to_interactive_owner() {
+        let endpoint: Endpoint =
+            serde_json::from_str(r#"{"address":"127.0.0.1:10001","token":"old","pid":1}"#).unwrap();
+
+        assert_eq!(endpoint.owner, ControlOwner::Interactive);
     }
 }

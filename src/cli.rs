@@ -16,6 +16,8 @@ use crate::onboarding::zapret::{ZapretInstall, ZapretPlan, apply_plan};
     about = "Noverplay в терминале"
 )]
 pub struct Cli {
+    #[arg(long, hide = true)]
+    pub background_player: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }

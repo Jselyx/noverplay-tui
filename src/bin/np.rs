@@ -1,11 +1,19 @@
-use anyhow::{Result, bail};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+use anyhow::{Context, Result, bail};
 use chrono::{Local, LocalResult, NaiveDate, TimeZone};
 use clap::Parser;
 use noverplay_tui::{
     config::AppPaths,
     control::{
-        ControlCommand, HistoryCommand, NpCli, NpCommand, QueueCommand, ResponseData, send_command,
-        split_provider_tag,
+        ControlCommand, HistoryCommand, NpCli, NpCommand, QueueCommand, ResponseData,
+        active_control_owner, send_command, split_provider_tag,
     },
     storage::{HistoryEntry, Storage},
 };
@@ -48,7 +56,7 @@ fn run_control(paths: &AppPaths, command: NpCommand) -> Result<()> {
         },
         NpCommand::History(_) => unreachable!(),
     };
-    let response = send_command(paths, command)?;
+    let response = send_command_with_autostart(paths, command)?;
     if json {
         match response.data.as_ref() {
             Some(ResponseData::Status(status)) if response.ok => {
@@ -78,6 +86,91 @@ fn run_control(paths: &AppPaths, command: NpCommand) -> Result<()> {
         bail!("команда отклонена");
     }
     Ok(())
+}
+
+fn send_command_with_autostart(
+    paths: &AppPaths,
+    command: ControlCommand,
+) -> Result<noverplay_tui::control::ControlResponse> {
+    let first_error = match send_command(paths, command.clone()) {
+        Ok(response) => return Ok(response),
+        Err(error) => error,
+    };
+    if active_control_owner(paths).is_some() {
+        return Err(first_error);
+    }
+
+    let mut child = spawn_background_player()?;
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        match send_command(paths, command.clone()) {
+            Ok(response) => return Ok(response),
+            Err(error) if Instant::now() >= deadline => {
+                return Err(error).context("Фоновый плеер не успел запуститься");
+            }
+            Err(_) => {}
+        }
+        if let Some(status) = child.try_wait()? {
+            bail!("Фоновый плеер завершился при запуске: {status}");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn spawn_background_player() -> Result<Child> {
+    let binary = background_player_binary()?;
+    let mut command = Command::new(&binary);
+    command
+        .arg("--background-player")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // консоль ушла спать, музыка решила что ей вообще-то необязательно
+        command.creation_flags(0x0800_0000);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // SAFETY: pre_exec будит только async-signal-safe setsid, остальной Rust продолжает спать
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+    }
+    command
+        .spawn()
+        .with_context(|| format!("Не удалось запустить {}", binary.display()))
+}
+
+fn background_player_binary() -> Result<PathBuf> {
+    background_player_binary_next_to(&env::current_exe()?)
+}
+
+fn background_player_binary_next_to(current_exe: &Path) -> Result<PathBuf> {
+    let file_name = if cfg!(windows) {
+        "noverplay.exe"
+    } else {
+        "noverplay"
+    };
+    let sibling = current_exe
+        .parent()
+        .context("np остался без каталога бинарника")?
+        .join(file_name);
+    if sibling.is_file() {
+        Ok(sibling)
+    } else {
+        Ok(PathBuf::from(file_name))
+    }
 }
 
 fn run_history(paths: &AppPaths, command: HistoryCommand) -> Result<()> {
@@ -174,5 +267,21 @@ mod tests {
         let now = Local::now().timestamp_millis();
         assert!(start <= now && now < end);
         assert!((22 * 3_600_000..=26 * 3_600_000).contains(&(end - start)));
+    }
+
+    #[test]
+    fn background_player_is_resolved_next_to_np() {
+        let temp = tempfile::tempdir().unwrap();
+        let np = temp
+            .path()
+            .join(if cfg!(windows) { "np.exe" } else { "np" });
+        let expected = temp.path().join(if cfg!(windows) {
+            "noverplay.exe"
+        } else {
+            "noverplay"
+        });
+        std::fs::write(&expected, []).unwrap();
+
+        assert_eq!(background_player_binary_next_to(&np).unwrap(), expected);
     }
 }

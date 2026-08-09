@@ -12,7 +12,8 @@ use noverplay_tui::{
     cli::{Cli, run_command},
     config::{AppConfig, AppPaths},
     control::{
-        ControlCommand, ControlRequest, ControlResponse, ControlServer, ResponseData, send_response,
+        ControlCommand, ControlOwner, ControlRequest, ControlResponse, ControlServer, ResponseData,
+        active_control_owner, send_command, send_response,
     },
     event::EventPump,
     hotkeys::GlobalHotkeys,
@@ -29,9 +30,13 @@ const CONTROL_COMMAND_TIMEOUT: Duration = Duration::from_secs(28);
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.command {
-        Some(command) => run_command(command)?,
-        None => run_tui().await?,
+    if cli.background_player {
+        run_background_player().await?;
+    } else {
+        match cli.command {
+            Some(command) => run_command(command)?,
+            None => run_tui().await?,
+        }
     }
     Ok(())
 }
@@ -39,33 +44,9 @@ async fn main() -> Result<()> {
 async fn run_tui() -> Result<()> {
     let paths = AppPaths::discover()?;
     paths.ensure()?;
-    let mut config = AppConfig::load(&paths)?.normalized();
-    let secrets = SecretStore::new(paths.secrets_file.clone());
-    if let Some(client_id) = config.soundcloud_client_id_override.take() {
-        secrets.set(
-            noverplay_tui::secrets::SecretKey::SoundCloudClientIdOverride,
-            &client_id,
-        )?;
-        config.save(&paths)?;
-    }
-    let storage = Storage::new(paths.database_file.clone());
-    storage.initialize()?;
+    stop_background_player(&paths).await?;
     let control = ControlServer::bind(&paths)?;
-    let audio_outputs = if config.onboarding_completed {
-        Vec::new()
-    } else {
-        AudioEngine::output_devices().unwrap_or_default()
-    };
-    let mut app = App::load_with_audio_outputs(&storage, &config, audio_outputs)?;
-    let mut runtime = Runtime::new(&config, &secrets, storage.clone());
-    match runtime.credential_state() {
-        Ok(credentials) => app.set_credentials(credentials),
-        Err(error) => app.status_message = format!("Не удалось проверить ключи: {error}"),
-    }
-    if let Some(notice) = runtime.take_notices().into_iter().last() {
-        app.status_message = notice;
-    }
-    app.restore_account();
+    let (mut config, storage, mut app, mut runtime) = load_player(&paths, true)?;
     let mut terminal = TerminalGuard::enter()?;
     let mut events = EventPump::with_frame_limit(config.frame_limit);
     let hotkeys = match GlobalHotkeys::new(&config) {
@@ -117,23 +98,104 @@ async fn run_tui() -> Result<()> {
             }
             app.config_dirty = true;
         }
-        if app.queue_dirty {
-            storage.save_queue(&app.queue_snapshot())?;
-            app.queue_dirty = false;
+        persist_player(&paths, &storage, &mut config, &mut app)?;
+    }
+    Ok(())
+}
+
+async fn run_background_player() -> Result<()> {
+    let paths = AppPaths::discover()?;
+    paths.ensure()?;
+    let control = ControlServer::bind_background(&paths)?;
+    let (mut config, storage, mut app, mut runtime) = load_player(&paths, false)?;
+    let hotkeys = GlobalHotkeys::new(&config).unwrap_or_default();
+    let mut pending_control = None;
+
+    while !app.should_quit {
+        poll_control(&control, &mut app, &mut pending_control);
+        if let Some(action) = hotkeys.as_ref().and_then(GlobalHotkeys::try_action) {
+            app.handle(action);
         }
-        if app.config_dirty {
-            config.volume_percent = app.player.volume_percent;
-            config.soundcloud_enabled = app.soundcloud_enabled;
-            config.yandex_enabled = app.yandex_enabled;
-            config.deezer_enabled = app.deezer_enabled;
-            config.global_hotkeys_enabled = app.global_hotkeys_enabled;
-            config.hotkeys = app.hotkeys.clone();
-            config.keybindings_notice_seen = app.keybindings_notice_seen;
-            config.guest_mode = app.account.user().is_none();
-            config.soundcloud_client_id_refresh_at_ms = app.soundcloud_refresh_at_ms;
-            config.save(&paths)?;
-            app.config_dirty = false;
+        drive_runtime(&mut app, &mut runtime, &mut pending_control);
+        persist_player(&paths, &storage, &mut config, &mut app)?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    Ok(())
+}
+
+fn load_player(
+    paths: &AppPaths,
+    discover_audio_outputs: bool,
+) -> Result<(AppConfig, Storage, App, Runtime)> {
+    let mut config = AppConfig::load(paths)?.normalized();
+    let secrets = SecretStore::new(paths.secrets_file.clone());
+    if let Some(client_id) = config.soundcloud_client_id_override.take() {
+        secrets.set(
+            noverplay_tui::secrets::SecretKey::SoundCloudClientIdOverride,
+            &client_id,
+        )?;
+        config.save(paths)?;
+    }
+    let storage = Storage::new(paths.database_file.clone());
+    storage.initialize()?;
+    let audio_outputs = if config.onboarding_completed || !discover_audio_outputs {
+        Vec::new()
+    } else {
+        AudioEngine::output_devices().unwrap_or_default()
+    };
+    let mut app = App::load_with_audio_outputs(&storage, &config, audio_outputs)?;
+    let mut runtime = Runtime::new(&config, &secrets, storage.clone());
+    match runtime.credential_state() {
+        Ok(credentials) => app.set_credentials(credentials),
+        Err(error) => app.status_message = format!("Не удалось проверить ключи: {error}"),
+    }
+    if let Some(notice) = runtime.take_notices().into_iter().last() {
+        app.status_message = notice;
+    }
+    app.restore_account();
+    Ok((config, storage, app, runtime))
+}
+
+fn persist_player(
+    paths: &AppPaths,
+    storage: &Storage,
+    config: &mut AppConfig,
+    app: &mut App,
+) -> Result<()> {
+    if app.queue_dirty {
+        storage.save_queue(&app.queue_snapshot())?;
+        app.queue_dirty = false;
+    }
+    if app.config_dirty {
+        config.volume_percent = app.player.volume_percent;
+        config.soundcloud_enabled = app.soundcloud_enabled;
+        config.yandex_enabled = app.yandex_enabled;
+        config.deezer_enabled = app.deezer_enabled;
+        config.global_hotkeys_enabled = app.global_hotkeys_enabled;
+        config.hotkeys = app.hotkeys.clone();
+        config.keybindings_notice_seen = app.keybindings_notice_seen;
+        config.guest_mode = app.account.user().is_none();
+        config.soundcloud_client_id_refresh_at_ms = app.soundcloud_refresh_at_ms;
+        config.save(paths)?;
+        app.config_dirty = false;
+    }
+    Ok(())
+}
+
+async fn stop_background_player(paths: &AppPaths) -> Result<()> {
+    if active_control_owner(paths) != Some(ControlOwner::Background) {
+        return Ok(());
+    }
+    let response = send_command(paths, ControlCommand::Shutdown)?;
+    if !response.ok {
+        anyhow::bail!(response.message);
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while paths.control_endpoint_file.exists() {
+        if Instant::now() >= deadline {
+            anyhow::bail!("Фоновый плеер не освободил control endpoint");
         }
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
     Ok(())
 }
@@ -236,6 +298,10 @@ fn begin_control(
             "Текущее состояние",
             ResponseData::Status(Box::new(app.status_snapshot())),
         )),
+        ControlCommand::Shutdown => {
+            app.should_quit = true;
+            Ok(ControlResponse::accepted("Фоновый плеер остановлен"))
+        }
     };
     let _ = send_response(stream, &response.unwrap_or_else(ControlResponse::error));
     None
