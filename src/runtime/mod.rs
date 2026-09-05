@@ -266,12 +266,25 @@ impl Runtime {
                 RuntimeMessage::PlaybackReady { generation, source }
                     if generation == self.playback_generation =>
                 {
+                    if self.audio.is_none() {
+                        match AudioEngine::new(
+                            self.config.audio_output.as_deref(),
+                            self.config.volume_percent,
+                        ) {
+                            Ok(audio) => {
+                                self.audio = Some(audio);
+                                self.last_audio_status = None;
+                            }
+                            Err(error) => {
+                                actions.push(Action::PlaybackFailed(format!(
+                                    "аудиовыход недоступен: {error:#}"
+                                )));
+                                continue;
+                            }
+                        }
+                    }
                     if let Some(audio) = &self.audio {
                         audio.play(source);
-                    } else {
-                        actions.push(Action::PlaybackFailed(
-                            "в системе не найден аудиовыход".to_string(),
-                        ));
                     }
                 }
                 RuntimeMessage::PlaybackFailed { generation, error }

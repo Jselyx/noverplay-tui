@@ -700,8 +700,9 @@ mod tests {
 
     #[test]
     fn full_cache_source_is_not_downgraded_to_preview() {
-        let path = std::path::Path::new("C:/cache/deezer-track.mp3");
-        let source = full_cache_source(path).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("deezer-track.mp3");
+        let source = full_cache_source(&path).unwrap();
         assert_eq!(source.capability, PlaybackCapability::Full);
         assert_eq!(source.mime_type.as_deref(), Some("audio/mpeg"));
         assert_eq!(source.url.scheme(), "file");
